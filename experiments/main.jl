@@ -1,23 +1,18 @@
-cd(@__DIR__)
-cd("..")
-using Pkg
-Pkg.activate(".")
+using Distributed
+addprocs(14)
+@everywhere cd(@__DIR__)
+@everywhere cd("..")
+@everywhere using Pkg
+@everywhere Pkg.activate(".")
 
-using PowerSystems
-using PowerSimulationsDynamics
-using ZIPE_loads
-using TLmodels
-
-const PSY = PowerSystems
-const PSID = PowerSimulationsDynamics
-
+@everywhere include("sysbuilder.jl")
 include("../data/build_scripts/device_models.jl")
 
-sys = System(joinpath(pwd(), "../raw_data/WSCC_9bus.raw"))
+sys() = System(joinpath(pwd(), "data/raw_data/WSCC_9bus.raw"))
 
 
-case_inv = DynamicInverter(
-    get_name(g),
+case_inv() = DynamicInverter(
+    "DynamicInverter",
     1.0, # ω_ref,
     converter_high_power(), #converter
     VSM_outer_control(), #outer control
@@ -27,12 +22,26 @@ case_inv = DynamicInverter(
     filt(), #filter
 )
 
-case_gen = DynamicGenerator(
-    get_name(g),
+machine_oneDoneQ() = OneDOneQMachine(
+    0.1, #R
+    1.3125, #Xd
+    1.2578, #Xq
+    0.1813, #Xd_p
+    0.25, #Xq_p
+    5.89, #Td0_p
+    0.6, #Tq0_p
+)
+case_gen() = DynamicGenerator(
+    "DynamicGenerator",
     1.0, # ω_ref,
-    AF_machine(), #machine
+    machine_oneDoneQ(), #machine
     shaft_no_damping(), #shaft
     avr_type1(), #avr
     tg_none(), #tg
     pss_none(), #pss
 )
+syses, combos = makeSystems(sys(), [case_gen(), case_inv()])
+results = pmap(runSim, syses)
+
+results = Dict(zip(combos, results))
+Dict(zip(keys(results), [i[2] for i in values(results)]))
