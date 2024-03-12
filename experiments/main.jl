@@ -34,7 +34,7 @@ machine_oneDoneQ() = OneDOneQMachine(
 case_gen() = DynamicGenerator(
     "DynamicGenerator",
     1.0, # ω_ref,
-    machine_oneDoneQ(), #machine
+    AF_machine(), #machine
     shaft_no_damping(), #shaft
     avr_type1(), #avr
     tg_none(), #tg

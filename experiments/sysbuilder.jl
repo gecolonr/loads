@@ -19,7 +19,7 @@ function withName(injector::DynamicInjection, name::String)
     return newinjector
 end
 
-function makeSystems(sys::System, injectors::AbstractArray{DynamicInjection}, busgroups::Union{AbstractArray{Vector{String}}, AbstractArray{String}, Nothing}=nothing)
+function makeSystems(sys::System, injectors::Union{AbstractArray{DynamicInjection}, AbstractArray{DynamicInjection, 2}}, busgroups::Union{AbstractArray{Vector{String}}, AbstractArray{String}, Nothing}=nothing)
     if isnothing(busgroups)
         busgroups = [[get_bus(i).name] for i in get_components(Generator, sys)]
     elseif busgroups[1] isa String
@@ -35,7 +35,12 @@ function makeSystems(sys::System, injectors::AbstractArray{DynamicInjection}, bu
             end
         end
     end
-    combos = with_replacement_combinations(injectors, length(busgroups))
+    if length(size(injectors))>1
+        combos = injectors
+    else
+        combos = with_replacement_combinations(injectors, length(busgroups))
+        combos = reduce(vcat, [collect(permutations(i)) for i in combos])
+    end
     println(combos)
     systems = Array{System}(undef, length(combos))
     for (comboIdx, combo) in enumerate(combos)
