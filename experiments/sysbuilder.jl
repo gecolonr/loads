@@ -25,7 +25,7 @@ function makeSystems(sys::System, injectors::Union{AbstractArray{DynamicInjectio
     elseif busgroups[1] isa String
         busgroups = [[i] for i in busgroups]
     end
-    println(busgroups)
+    # println(busgroups)
     gengroups = [[] for _ in busgroups]
     for g in get_components(Generator, sys)
         for (idx, group) in enumerate(busgroups)
@@ -37,11 +37,13 @@ function makeSystems(sys::System, injectors::Union{AbstractArray{DynamicInjectio
     end
     if length(size(injectors))>1
         combos = injectors
+        print("HERE1")
     else
         combos = with_replacement_combinations(injectors, length(busgroups))
         combos = reduce(vcat, [collect(permutations(i)) for i in combos])
+        print("HERE2")
     end
-    println(combos)
+    # println(combos)
     systems = Array{System}(undef, length(combos))
     for (comboIdx, combo) in enumerate(combos)
         systems[comboIdx] = deepcopy(sys)
@@ -60,7 +62,7 @@ function makeSystems(sys::System, injectors::Union{AbstractArray{DynamicInjectio
     return systems, [[i.name for i in combo] for combo in combos]
 end
 
-function runSim(system, change=BranchTrip(0.5, ACBranch, "Bus 5-Bus 4-i_1"), model=ResidualModel, tspan=(0., 5.), solver=IDA(), dtmax=0.02)
+function runSim(system, change=BranchTrip(0.5, ACBranch, "Bus 5-Bus 4-i_1"), model=ResidualModel, tspan=(0., 5.), solver=IDA(), dtmax=0.02, run_transient=true)
     sim = Simulation(
         model,
         system,
@@ -68,13 +70,27 @@ function runSim(system, change=BranchTrip(0.5, ACBranch, "Bus 5-Bus 4-i_1"), mod
         tspan,
         change,
     )
-    execute!(
-        sim,
-        solver,
-        dtmax = dtmax,
-    )
-    # results = read_results(sim)
     sm = small_signal_analysis(sim)
+    if run_transient
+        execute!(
+            sim,
+            solver,
+            dtmax = dtmax,
+        )
+        return (sim, sm)
+    else
+    # results = read_results(sim)
     # plot(sm.eigenvalues, seriestype=:scatter, label=L"eigenvalues $\lambda$")
-    return (sim, sm)
+        return (0, sm)
+    end
+end
+
+function get_permutations(iterable, k)
+    if k == 1
+        return iterable
+    end
+    return Iterators.flatten(
+        (Iterators.flatten((i, j)) for j in get_permutations(iterable, k-1))
+            for i in iterable
+    )
 end
