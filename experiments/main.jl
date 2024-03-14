@@ -40,7 +40,8 @@ case_gen() = DynamicGenerator(
     tg_none(), #tg
     pss_none(), #pss
 )
-syses, combos = makeSystems(sys(), [case_gen(), case_inv()])
+sysdict = makeSystems(sys(), [case_gen(), case_inv()])
+combos, syses = keys(sysdict), values(sysdict)
 results = pmap(runSim, syses)
 
 results = Dict(zip(combos, results))
