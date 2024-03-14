@@ -130,7 +130,7 @@ function zipe_gridsearch(systems)
                     (0.0, 5.0), # time span
                     IDA(), # DE solver
                     0.02, # max dt
-                    false, # true=run transient simulation, false=don't
+                    true, # true=run transient simulation, false=don't
                 )
                 # add results as a new row of the df
                 push!(df, (combo, params[1], params[2], params[3], params[4], count(x->(x.re>0.0), sm.eigenvalues), findmax(map(x->x.re, sm.eigenvalues))[1], string(sim.status)))
@@ -155,7 +155,7 @@ mytrace = parcoords(
     ;line = attr(color=df.n_pos_eigs),
     dimensions = [
         # system configuration
-        attr(range = [1, length(combos)], label = "generators", values = map(x->Dict(zip(keys(sysdict), 1:(length(sysdict))))[x], df.combo),tickvals = 1:length(sysdict),ticktext=[i[1]*"-"*i[2] for i in keys(sysdict)]),
+        attr(range = [1, length(sysdict)], label = "generators", values = map(x->Dict(zip(keys(sysdict), 1:(length(sysdict))))[x], df.combo),tickvals = 1:length(sysdict),ticktext=[i[1]*"-"*i[2] for i in keys(sysdict)]),
         # ZIPE parameters
         attr(range = [findmin(df.Z)[1], findmax(df.Z)[1]], label = "Z", values = df.Z),
         attr(range = [findmin(df.I)[1], findmax(df.I)[1]], label = "I", values = df.I),
@@ -164,7 +164,9 @@ mytrace = parcoords(
         # number of positive eigenvalues
         attr(range = [0,findmax(df.n_pos_eigs)[1]], label = "n pos eigs" , values = df.n_pos_eigs),
         # maximum real component
-        attr(range = [log(findmin(df.max_eig)[1]), log(findmax(df.max_eig)[1])], label="ln(max eig)", values=log.(df.max_eig))
+        attr(range = [log(findmin(df.max_eig)[1]), log(findmax(df.max_eig)[1])], label="ln(max eig)", values=log.(df.max_eig)),
+        attr(range = [0., 1.], label="solve status", values=1.0*(df.sim_status.=="SIMULATION_FINALIZED"), tickvals=[0., 1.], ticktext=["FAILED", "FINALIZED"])
+
     ]);
 
 # define layout
