@@ -9,7 +9,8 @@ using ZIPE_loads
 using InfrastructureSystems
 using Plots
 using PlotlyJS, DataFrames
-
+# using Distributed
+# addprocs(14)
 include("sysbuilder.jl")
 include("../data/build_scripts/device_models.jl")
 
@@ -98,28 +99,27 @@ function gridsearch(dx=0.1, Zmax=1.0, Imax=1.0, Pmax=1.0)
     return ([i j k 1.0-i-j-k] for i in 0.0:dx:Zmax for j in 0.0:dx:min(1.0-i, Imax) for k in 0.0:dx:min(1.0-i-j, Pmax))
 end
 
-# TODO: parallelize this
-function zipe_gridsearch(systems)
+
+
+function zipe_gridsearch(systems, params)
     """performs a sweep over all ZIPE parameters and all systems in `systems`.
 
     Args:
         systems (Dict{Vector{String}=>System}): dictionary of all the system variants to test
+        params (Iterable{Vector{Float64}}): iterable of all sets of zipe parameters to try
     
     Returns:
         DataFrame: df of results with columns [combo (`systems` key type), Z, I, P, E, number of positive eigenvalues, max eigenvalue, simulation status]
     """
-    # initialize df to hold all data
-    df = DataFrame(combo=Vector{String}[], Z=Float64[], I=Float64[], P=Float64[], E=Float64[], n_pos_eigs=Int[], max_eig=Float64[], sim_status=String[]);
 
-    # loop through all combinations of ZIPE parameters
-    for params in gridsearch()
-        # loop through all system configurations
-        for (combo, s) in systems
+    function testparams(params)
+        out = []
+        for (combo, s) in deepcopy(systems)
             # make a new system for this simulation
             sys = deepcopy(s)
             # add ZIPE load to the system with `params`
             create_ZIPE_load(sys, LoadParams(params...))
-
+            
             # try/catch block to catch simulation convergence errors
             try
                 # runSim is from sysbuilder.jl
@@ -132,27 +132,51 @@ function zipe_gridsearch(systems)
                     0.02, # max dt
                     true, # true=run transient simulation, false=don't
                 )
+                if string(sim.status)=="SIMULATION_FINALIZED"
+                    series = get_voltage_magnitude_series(read_results(sim), 102)
+                    startidx = findmin(abs.(series[1].-0.5))[2]
+                    quad = sum((abs.(series[2][startidx:end-1])).*(diff(series[1][startidx:end])))
+                    push!(out, (combo=deepcopy(combo), Z=params[1], I=params[2], P=params[3], E=params[4], n_pos_eigs=count(x->(x.re>0.0), sm.eigenvalues), max_eig=findmax(map(x->x.re, sm.eigenvalues))[1], sim_status=string(sim.status), transquad=quad))
+                else
+                    push!(out, (combo=deepcopy(combo), Z=params[1], I=params[2], P=params[3], E=params[4], n_pos_eigs=count(x->(x.re>0.0), sm.eigenvalues), max_eig=findmax(map(x->x.re, sm.eigenvalues))[1], sim_status=string(sim.status)))
+                end
                 # add results as a new row of the df
-                push!(df, (combo, params[1], params[2], params[3], params[4], count(x->(x.re>0.0), sm.eigenvalues), findmax(map(x->x.re, sm.eigenvalues))[1], string(sim.status)))
                 # status print (removed for cleanliness)
                 # println(combo, " had ", count(x->(x.re>=0.0), sm.eigenvalues), " positive eigenvalue(s), with max real part ", findmax(map(x->x.re, sm.eigenvalues))[1])
             catch e
                 # this catches cases where no equilibrium point could be found
                 # we exclude these cases from the output data because they are infeasible.
-                continue
+                # return false
+                push!(out, (combo=combo, Z=params[1], I=params[2], P=params[3], E=params[4], sim_status="FAILED"))
             end
-            println(params) # so users know approximately how far along we are in the sim
+        end
+        return out
+    end
+
+    # initialize df to hold all data
+    df = DataFrame(combo=Vector{String}[], Z=Float64[], I=Float64[], P=Float64[], E=Float64[], n_pos_eigs=Int[], max_eig=Float64[], sim_status=String[], transquad=Float64[]);
+    
+    lk = ReentrantLock()
+    Threads.@threads for params in collect(params)
+        res = testparams(params);
+        if res!=false
+            lock(lk) do 
+                for row in res
+                    push!(df, row, cols=:subset)
+                end
+            end
         end
     end
+
     return df
 end
 
 # run gridsearch
-df = zipe_gridsearch(sysdict)
+df = zipe_gridsearch(sysdict, gridsearch())
 
 # create trace for plotlyjs
 mytrace = parcoords(
-    ;line = attr(color=df.n_pos_eigs),
+    ;line = attr(color=df.transquad, width=5),
     dimensions = [
         # system configuration
         attr(range = [1, length(sysdict)], label = "generators", values = map(x->Dict(zip(keys(sysdict), 1:(length(sysdict))))[x], df.combo),tickvals = 1:length(sysdict),ticktext=[i[1]*"-"*i[2] for i in keys(sysdict)]),
@@ -161,6 +185,7 @@ mytrace = parcoords(
         attr(range = [findmin(df.I)[1], findmax(df.I)[1]], label = "I", values = df.I),
         attr(range = [findmin(df.P)[1], findmax(df.P)[1]], label = "P", values = df.P),
         attr(range = [findmin(df.E)[1], findmax(df.E)[1]], label = "E", values = df.E),
+        attr(range = [findmin(df.transquad)[1], findmax(df.transquad)[1]], label = "trans quad", values=df.transquad),
         # number of positive eigenvalues
         attr(range = [0,findmax(df.n_pos_eigs)[1]], label = "n pos eigs" , values = df.n_pos_eigs),
         # maximum real component
@@ -177,4 +202,17 @@ layout = Layout(
 )
 
 # make the plot!
-myplot = PlotlyJS.plot(mytrace,layout)
+plt = PlotlyJS.plot(mytrace,layout)
+PlotlyJS.savefig(plt, "plot.html")
+
+using Statistics
+function regression(df)
+    # We could now solve the logistic regression problem
+    X = Matrix(df[:, 2:5])
+    y = 1.0*(df.sim_status.=="SIMULATION_FINALIZED")
+    mapfunc = x->Dict("I"=>0.0, "G"=>1.0)[x]
+    # println(hcat([mapfunc(x[1]), mapfunc(x[2])] for x in df[:, 1]])))
+    X = hcat([mapfunc(x[1]) for x in df[:, 1]], [mapfunc(x[2]) for x in df[:, 1]], X, ones(length(df[:, 1])))
+    return (X'*X)\(X'*y)
+end
+
