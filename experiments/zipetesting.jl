@@ -11,6 +11,7 @@ using Plots
 using PlotlyJS, DataFrames
 # using Distributed
 # addprocs(14)
+using TLmodels
 include("sysbuilder.jl")
 include("../data/build_scripts/device_models.jl")
 
@@ -99,8 +100,6 @@ function gridsearch(dx=0.1, Zmax=1.0, Imax=1.0, Pmax=1.0)
     return ([i j k 1.0-i-j-k] for i in 0.0:dx:Zmax for j in 0.0:dx:min(1.0-i, Imax) for k in 0.0:dx:min(1.0-i-j, Pmax))
 end
 
-
-
 function zipe_gridsearch(systems, params)
     """performs a sweep over all ZIPE parameters and all systems in `systems`.
 
@@ -115,6 +114,7 @@ function zipe_gridsearch(systems, params)
     function testparams(params)
         out = []
         for (combo, s) in deepcopy(systems)
+            
             # make a new system for this simulation
             sys = deepcopy(s)
             # add ZIPE load to the system with `params`
