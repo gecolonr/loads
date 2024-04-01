@@ -156,6 +156,7 @@ end
 function size(gss::GridSearchSys)
     return (length(gss.sysdict), length(gss.header))
 end
+
 function executeSims(gss::GridSearchSys, change, tspan::Tuple{Float64, Float64}=(0.0, 3.0), dtmax=0.02, run_transient::Bool=true)
     gen_busses = collect(get_bus.(get_components(Generator, gss.base)))
     gen_dict = Dict(get_name.(get_components(Generator, gss.base)) .=> get_number.(gen_busses))
@@ -165,8 +166,46 @@ function executeSims(gss::GridSearchSys, change, tspan::Tuple{Float64, Float64}=
     cols = [gss.header..., "eigenvalues", "eigenvectors", bus_voltages..., inverter_currents..., generator_speeds..., "Simulation Status"]
     transient_results_length = length(bus_voltages) + length(inverter_currents) + length(generator_speeds)
     df = DataFrame([i=>[] for i in cols])
+    function inner(config::Vector{Any}, sys::System)
+        local sim, sm
+        try
+            (sim, sm) = runSim(sys, change, ResidualModel, tspan, IDA(), dtmax, run_transient)
+        catch error
+            return (config..., missing, missing, Array{Missing}(missing, transient_results_length)..., string(error))
+        else
+            if string(sim.status) != "SIMULATION_FINALIZED"
+                return (config..., sm.eigenvalues, sm.eigenvectors, Array{Missing}(missing, transient_results_length)..., string(sim.status))
+            else
+                res = read_results(sim)
+                inverters = [i for i in get_components(DynamicInverter, sys) if i.name in keys(gen_dict)]
+                inverters = Dict(map(x->gen_dict[x], get_name.(inverters)) .=> inverters)
+                generators = [i for i in get_components(DynamicGenerator, sys) if i.name in keys(gen_dict)]
+                generators = Dict(map(x->gen_dict[x], get_name.(generators)) .=> generators)
+    
+                return (
+                    config..., 
+                    sm.eigenvalues, 
+                    sm.eigenvectors, 
+                    [get_voltage_magnitude_series(res, i)[2] for i in get_number.(get_components(Bus, gss.base))]...,
+                    [(i in keys(inverters) ? current_magnitude(res, inverters[i].name) : missing) for i in get_number.(gen_busses)]...,
+                    [(i in keys(generators) ? generator_speed(res, generators[i].name) : missing) for i in get_number.(gen_busses)]...,
+                    string(sim.status)
+                )
+            end
+        end
+    end
     lk = ReentrantLock()
-    Threads.@threads :static for (config, sys) in collect(gss.sysdict)
+    chunks = collect(Iterators.partition(collect(gss.sysdict), length(gss.sysdict) ÷ Threads.nthreads()))
+    Threads.@threads for chunk in chunks
+        results = [inner(config, sys) for (config, sys) in chunk]
+        lock(lk) do 
+            for row in results
+                push!(df, row)
+            end
+        end
+    end
+    return df
+    Threads.@threads for (config, sys) in collect(gss.sysdict)
         local sim, sm
         try
             (sim, sm) = runSim(sys, change, ResidualModel, tspan, IDA(), dtmax, run_transient)
@@ -202,6 +241,8 @@ function executeSims(gss::GridSearchSys, change, tspan::Tuple{Float64, Float64}=
     end
     return df
 end
+
+
 
 function current_magnitude(res, name)
     _, ir = get_state_series(res, (name, :ir_cnv))
