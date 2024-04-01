@@ -11,6 +11,7 @@ using Combinatorics
 using Sundials
 using ArgCheck
 using DataFrames
+import Logging
 
 const PSY = PowerSystems;
 const PSID = PowerSimulationsDynamics;
@@ -249,6 +250,7 @@ function runSim(system, change=BranchTrip(0.5, ACBranch, "Bus 5-Bus 4-i_1"), mod
         mktempdir(),
         tspan,
         change,
+        file_level = Logging.Warn,
     )
     sm = small_signal_analysis(sim)
     if run_transient
@@ -257,6 +259,7 @@ function runSim(system, change=BranchTrip(0.5, ACBranch, "Bus 5-Bus 4-i_1"), mod
             solver,
             dtmax = dtmax,
             saveat = dtmax,
+            enable_progress_bar = false, # with multithreading it's meaningless anyways
         )
     end
     return (sim, sm)
