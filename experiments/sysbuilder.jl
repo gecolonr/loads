@@ -107,6 +107,8 @@ mutable struct GridSearchSys
     base::System
     header::Vector{String}
     sysdict::Dict{Vector{Any}, System}
+    results_header::Vector{String}
+    results_getters::Vector{Function}
 end
 
 """
@@ -114,6 +116,11 @@ Adds a column to the header. literally just `push!(gss.header, title)`. for clea
 """
 function add_column!(gss::GridSearchSys, title)
     push!(gss.header, title)
+end
+
+function add_result!(gss::GridSearchSys, title::String, getter::Function)
+    push!(gss.results_header, title)
+    push!(gss.results_getters, getter)
 end
 
 
@@ -132,7 +139,7 @@ function GridSearchSys(sys::System, injectors::Union{AbstractArray{DynamicInject
         header = [join(i, ", ") for i in busgroups]
     end
     header = (x->"injector at {$x}").(header)
-    return GridSearchSys(sys, header, sysdict)
+    return GridSearchSys(sys, header, sysdict, Vector(), Vector())
 end
 
 """
@@ -260,19 +267,61 @@ function executeSims(gss::GridSearchSys, change, tspan::Tuple{Float64, Float64}=
                     string(sim.status),
                     time
                     )
-                end
             end
         end
-        
-        lk = ReentrantLock()
-        Threads.@threads for (key, val) in collect(gss.sysdict)
-            results = inner(key, val)
-            lock(lk) do 
-                push!(df, results)
-            end
-        end
-        return df
     end
+        
+    lk = ReentrantLock()
+    Threads.@threads for (key, val) in collect(gss.sysdict)
+        results = inner(key, val)
+        lock(lk) do 
+            push!(df, results)
+        end
+    end
+    return df
+end
+
+function get_eigenvalues(_gss::GridSearchSys, _sim::Simulation, sm::PSID.SmallSignalOutput)
+    return sm isa Missing ? missing : [sm.eigenvalues]
+end
+
+function get_eigenvectors(_gss::GridSearchSys, _sim::Simulation, sm::PSID.SmallSignalOutput)
+    return sm isa Missing ? missing : [sm.eigenvectors]
+end
+
+function get_bus_voltages(gss::GridSearchSys, sim::Simulation, _sm::PSID.SmallSignalOutput)
+    if sim isa Missing
+        return Array{Missing}(missing, length(get_components(Bus, gss.base)))
+    else
+        return [get_voltage_magnitude_series(sim.results, i)[2] for i in get_number.(get_components(Bus, gss.base))]
+    end
+end
+
+function get_inverter_currents(gss::GridSearchSys, sim::Simulation, _sm::PSID.SmallSignalOutput)
+    if sim isa Missing
+        return Array{Missing}(missing, length(get_components(Generator, gss.base)))
+    end
+    gen_busses = collect(get_bus.(get_components(Generator, gss.base)))
+    gen_dict = Dict(get_name.(get_components(Generator, gss.base)) .=> get_number.(gen_busses))
+    inverters = [i for i in get_components(DynamicInverter, sys) if i.name in keys(gen_dict)]
+    inverters = Dict(map(x->gen_dict[x], get_name.(inverters)) .=> inverters)
+    return [(i in keys(inverters) ? current_magnitude(res, inverters[i].name) : missing) for i in get_number.(gen_busses)]
+end
+
+function get_generator_speeds(gss::GridSearchSys, sim::Simulation, _sm::PSID.SmallSignalOutput)
+    if sim isa Missing
+        return Array{Missing}(missing, length(get_components(Generator, gss.base)))
+    end
+    gen_busses = collect(get_bus.(get_components(Generator, gss.base)))
+    gen_dict = Dict(get_name.(get_components(Generator, gss.base)) .=> get_number.(gen_busses))
+    generators = [i for i in get_components(DynamicGenerator, sys) if i.name in keys(gen_dict)]
+    generators = Dict(map(x->gen_dict[x], get_name.(generators)) .=> generators)
+    return [(i in keys(generators) ? generator_speed(res, generators[i].name) : missing) for i in get_number.(gen_busses)]
+end
+
+function get_sim_status(_gss::GridSearchSys, sim::Simulation, _sm::PSID.SmallSignalOutput)
+    return (sim isa Missing) ? missing : sim.status
+end
 
 
 """
