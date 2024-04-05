@@ -126,8 +126,10 @@ load(s) = StandardLoad(
     constant_reactive_power=0.1,
 )
 
+"""
+returns generator of all Z, I, P, and E combinations in steps of `dx`.
+"""
 function gridsearch(dx=0.1, Zmax=1.0, Imax=1.0, Pmax=1.0)
-    """returns generator of all Z, I, P, and E combinations"""
     return ([i j k 1.0-i-j-k] for i in 0.0:dx:Zmax for j in 0.0:dx:min(1.0-i, Imax) for k in 0.0:dx:min(1.0-i-j, Pmax))
 end
 

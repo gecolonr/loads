@@ -232,12 +232,15 @@ function executeSims(gss::GridSearchSys, change, tspan::Tuple{Float64, Float64}=
     total = length(gss)
     function inner(config::Vector{Any}, sys::System)
         local sim, sm, time
-        time = UInt64(0)
         try
-            (sim, sm, time) = runSim(sys, change, ResidualModel, tspan, IDA(), dtmax, run_transient)
+            (sim, sm, time) = runSim(sys, change, ResidualModel, tspan, IDA(linear_solver=:LapackBand, max_convergence_failures=10), dtmax, run_transient)
         catch error
+            i = Threads.atomic_add!(counter, 1) + 1
+            println("finished solve $i/$total in ----s ($(round(100.0*i/total))%)")
             return (config..., missing, missing, Array{Missing}(missing, transient_results_length)..., string(error), missing)
         else
+            i = Threads.atomic_add!(counter, 1) + 1
+            println("finished solve $i/$total in $(round(Int(time)/1e9, digits=2))s ($(round(100.0*i/total))%)")
             if string(sim.status) != "SIMULATION_FINALIZED"
                 return (config..., sm.eigenvalues, sm.eigenvectors, Array{Missing}(missing, transient_results_length)..., string(sim.status), time)
             else
@@ -267,8 +270,6 @@ function executeSims(gss::GridSearchSys, change, tspan::Tuple{Float64, Float64}=
             lock(lk) do 
                 push!(df, results)
             end
-            i = Threads.atomic_add!(counter, 1) + 1
-            println("finished solve $i/$length in $(round(Int(time)/1e9, 2))s ($(round(100.0*counter/total))%)")
         end
         return df
     end
@@ -349,7 +350,7 @@ function runSim(system, change=BranchTrip(0.5, ACBranch, "Bus 5-Bus 4-i_1"), mod
     end
     toc = Base.time_ns()
     # println("FINISHED A SOLVE")
-    return (sim, sm, toc-tic)
+    return (sim, sm, (toc-tic)::UInt64)
 end
 
 """
