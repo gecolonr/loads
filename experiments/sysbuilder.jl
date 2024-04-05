@@ -16,24 +16,25 @@ import Logging
 const PSY = PowerSystems;
 const PSID = PowerSimulationsDynamics;
 
+"""creates a copy of `injector` with the given name"""
 function withName(injector::DynamicInjection, name::String)
-    """creates a copy of `injector` with the given name"""
     newinjector = deepcopy(injector)
     newinjector.name = name
     return newinjector
 end
 
+"""
+makes all configurations of the given system and injectors, or specific given configurations.
+
+## Args:
+ - `sys::System` : the base system to work off of
+ - `injectors` (array of `DynamicInjection`): injectors to use. if one dimensional, all configurations of the given injectors will be returned. If 2d, each row of `injectors` will represent output configuration.
+ - `busgroups` (array of String or array of `Vector{String}`, optional): if just array of strings, represents list of buses to consider. If array of Vector{String}, each vector of bus names will be grouped together and always receive the same injector type. 
+
+## Returns:
+ - `Dict{Vector{String}, System}`: dictionary of {generator names (ordered) => system}. contains all variations.
+ """
 function makeSystems(sys::System, injectors::Union{AbstractArray{DynamicInjection}, AbstractArray{DynamicInjection, 2}}, busgroups::Union{AbstractArray{Vector{String}}, AbstractArray{String}, Nothing}=nothing)
-    """makes all configurations of the given system and injectors
-    
-    Args:
-        sys (System): the base system to work off of
-        injectors (array of DynamicInjection): injectors to use. if one dimensional, all configurations of the given injectors will be returned. If 2d, each row of `injectors` will represent output configuration.
-        busgroups (array of string or array of Vector{String}, optional): if just array of strings, represents list of buses to consider. If array of Vector{String}, each vector of bus names will be grouped together and always receive the same injector type. 
-    
-    Returns:
-        Dict{Vector{String}=>System}: dictionary of {generator names, ordered => system}. contains all variations.
-    """
     # first fix busgroups
     if isnothing(busgroups) # if nothing was passed
         # just get the name of every generator's bus in the system
@@ -59,7 +60,7 @@ function makeSystems(sys::System, injectors::Union{AbstractArray{DynamicInjectio
     end
     # now get injectors in correct form
     if length(size(injectors))>1 # this checks if it's 2d
-        combos = injectors # if 2d, don't get permutations - user wants specific manually listed configurations
+        combos = (injectors[i, :] for i in 1:size(injectors)[1]) # if 2d, don't get permutations - user wants specific manually listed configurations
     else
         # otherwise, get all the permutations! length(busgroups) is the number of injectors in each configuration.
         combos = get_permutations(injectors, length(busgroups))
@@ -90,20 +91,35 @@ function makeSystems(sys::System, injectors::Union{AbstractArray{DynamicInjectio
     return Dict(zip([[i.name for i in combo] for combo in combos], systems))
 end
 
+"""
+Struct to hold all the systems to iterate through.
+Create a GridSearchSys with the constructor whose signature matches the [`makeSystems`](@ref) method. This will start you off with combinations of injectors. Then you can add a ZIPE load sweep with [`add_zipe_sweep`](@ref) or a line model sweep with [`add_lines_sweep`](@ref).
+Use [`executeSims`](@ref) to run simulations for all the systems.
+
+`length` and `size` are implemented to give the number of systems and (number of systems, number of columns in header).
+
+## Attributes
+`base` is the base system. It may be modified, but you should always be able to make any of the actual systems by simply adding to the base.
+`header` is a list of the column titles for the dataframe. It should be human-readable.
+`sysdict` stores the systems in the format config::Vector => System.
+"""
 mutable struct GridSearchSys
     base::System
-    header::Vector{Any}
+    header::Vector{String}
     sysdict::Dict{Vector{Any}, System}
 end
 
-function GridSearchSys(base::System)
-    return GridSearchSys(base, Vector(), Dict())
-end
-
+"""
+Adds a column to the header. literally just `push!(gss.header, title)`. for cleanliness and encapsulation I guess.
+"""
 function add_column!(gss::GridSearchSys, title)
     push!(gss.header, title)
 end
 
+
+"""
+constructor for GridSearchSys with the exact same behavior as [`makeSystems`](@ref).
+"""
 function GridSearchSys(sys::System, injectors::Union{AbstractArray{DynamicInjection}, AbstractArray{DynamicInjection, 2}}, busgroups::Union{AbstractArray{Vector{String}}, AbstractArray{String}, Nothing}=nothing)
     sysdict = makeSystems(sys, injectors, busgroups)
     # first fix busgroups
@@ -119,7 +135,11 @@ function GridSearchSys(sys::System, injectors::Union{AbstractArray{DynamicInject
     return GridSearchSys(sys, header, sysdict)
 end
 
+"""
+Adds a ZIPE load sweep to a GridSearchSys. Pass in a standard load to base the ZIPE load off of, and a vector of LoadParams structs to test.
 
+The standard load should be a function which takes in a system and returns an appropriate load.
+"""
 function add_zipe_sweep!(gss::GridSearchSys, standardLoadFunction::Function, zipe_params::Vector{LoadParams})
     sysdict = deepcopy(gss.sysdict)
     for s in values(sysdict)
@@ -136,6 +156,12 @@ function add_zipe_sweep!(gss::GridSearchSys, standardLoadFunction::Function, zip
     add_column!(gss, "ZIPE Load Params")
 end
 
+"""
+adds a sweep over line models and parameters.
+`lineParams` should be a vector of LineModelParams structs, and `linemodelAdders` should be a dictionary of {model name (human readable) => func!(system, LineModelParams)} with all the model types to add.
+
+This is based around the TLModels.jl package, so linemodelAdders could for example have the pair `"statpi" =>`[`create_statpi_system`](@ref)
+"""
 function add_lines_sweep!(gss::GridSearchSys, lineParams::Vector{LineModelParams}, linemodelAdders::Dict{String, Function}=Dict("statpi"=>create_statpi_system, "dynpi"=>create_dynpi_system, "mssb"=>create_MSSB_system))
     add_column!(gss, "Line Model")
     add_column!(gss, "Line Params")
@@ -149,39 +175,78 @@ function add_lines_sweep!(gss::GridSearchSys, lineParams::Vector{LineModelParams
     end
     gss.sysdict = newsysdict
 end
+
 import Base: length, size
+"""
+number of total systems in the gridsearch
+"""
 function length(gss::GridSearchSys)
     return length(gss.sysdict)
 end
+
+"""
+(number of systems in gridsearch, number of columns in header)
+"""
 function size(gss::GridSearchSys)
     return (length(gss.sysdict), length(gss.header))
 end
 
+"""
+run simulations on all of the systems in the gridsearch and store the results in a DataFrame.
+
+fully parallelized. Be aware that the memory usage is quite high.
+
+## Args
+ - gss::GridSearchSys : the systems
+ - change : perturbation to apply to the system
+ - tspan::Tuple{Float64, Float64} : time interval (in seconds) to simulate.
+ - dtmax::Float64 : max timestep for solver, and resolution of saved timeseries results
+ - run_transient::Bool : whether or not to run the transient simulations.
+
+## Returns
+dataframe of results, with the following columns:
+| column name                 | content                                                                                                                                |
+| --------------------------- | -------------------------------------------------------------------------------------------------------------------------------------- |
+| gss.header                  | Everything in the GridSearchSys's header (all each individual columns). This is the system configuration.                              |
+| eigenvalues                 | λ's from the small signal analysis.                                                                                                    |
+| eigenvectors                | Eigenvectors from the small signal analysis.                                                                                           |
+| Voltage at Bus \$n          | Voltage time series, with timesteps `dtmax`, at each bus. One column per bus.                                                          |
+| Inverter Current at Bus \$n | Inverter current magnitude at bus \$n, or `missing` if there is no inverter there. One column per bus.                                 |
+| Generator Speed at Bus \$n  | Angular velocity of generator at bus \$n, or `missing` if there is no generator there. One column per bus.                             |
+| Simulation Status           | String representation of either the simulation status or the error caught during the call to [`runSim`](@ref).                         |
+| Simulation Time (ns)        | Time in nanoseconds to build the simulation, perform the small signal analysis, and (if `run_transient`) run the transient simulation. | 
+
+the columns `eigenvalues` and `eigenvectors` may be `missing` if the small signal analysis failed to converge.
+The columns with transient simulation results and the Simulation Time column may be `missing` if the small signal analysis or the transient simulation failed.
+"""
 function executeSims(gss::GridSearchSys, change, tspan::Tuple{Float64, Float64}=(0.0, 3.0), dtmax=0.02, run_transient::Bool=true)
     gen_busses = collect(get_bus.(get_components(Generator, gss.base)))
     gen_dict = Dict(get_name.(get_components(Generator, gss.base)) .=> get_number.(gen_busses))
     bus_voltages = (x->"Voltage at Bus $(get_number(x))").(get_components(Bus, gss.base))
     inverter_currents = (x->"Inverter Current at Bus $(get_number(x))").(gen_busses)
     generator_speeds = (x->"Generator Speed at Bus $(get_number(x))").(gen_busses)
-    cols = [gss.header..., "eigenvalues", "eigenvectors", bus_voltages..., inverter_currents..., generator_speeds..., "Simulation Status"]
+    cols = [gss.header..., "eigenvalues", "eigenvectors", bus_voltages..., inverter_currents..., generator_speeds..., "Simulation Status", "Simulation Time (ns)"]
     transient_results_length = length(bus_voltages) + length(inverter_currents) + length(generator_speeds)
     df = DataFrame([i=>[] for i in cols])
+    counter = Threads.Atomic{Int}(0)
+    total = length(gss)
     function inner(config::Vector{Any}, sys::System)
-        local sim, sm
+        local sim, sm, time
+        time = UInt64(0)
         try
-            (sim, sm) = runSim(sys, change, ResidualModel, tspan, IDA(), dtmax, run_transient)
+            (sim, sm, time) = runSim(sys, change, ResidualModel, tspan, IDA(), dtmax, run_transient)
         catch error
-            return (config..., missing, missing, Array{Missing}(missing, transient_results_length)..., string(error))
+            return (config..., missing, missing, Array{Missing}(missing, transient_results_length)..., string(error), missing)
         else
             if string(sim.status) != "SIMULATION_FINALIZED"
-                return (config..., sm.eigenvalues, sm.eigenvectors, Array{Missing}(missing, transient_results_length)..., string(sim.status))
+                return (config..., sm.eigenvalues, sm.eigenvectors, Array{Missing}(missing, transient_results_length)..., string(sim.status), time)
             else
                 res = read_results(sim)
                 inverters = [i for i in get_components(DynamicInverter, sys) if i.name in keys(gen_dict)]
                 inverters = Dict(map(x->gen_dict[x], get_name.(inverters)) .=> inverters)
                 generators = [i for i in get_components(DynamicGenerator, sys) if i.name in keys(gen_dict)]
                 generators = Dict(map(x->gen_dict[x], get_name.(generators)) .=> generators)
-    
+                
                 return (
                     config..., 
                     sm.eigenvalues, 
@@ -189,71 +254,49 @@ function executeSims(gss::GridSearchSys, change, tspan::Tuple{Float64, Float64}=
                     [get_voltage_magnitude_series(res, i)[2] for i in get_number.(get_components(Bus, gss.base))]...,
                     [(i in keys(inverters) ? current_magnitude(res, inverters[i].name) : missing) for i in get_number.(gen_busses)]...,
                     [(i in keys(generators) ? generator_speed(res, generators[i].name) : missing) for i in get_number.(gen_busses)]...,
-                    string(sim.status)
-                )
-            end
-        end
-    end
-    lk = ReentrantLock()
-    chunks = collect(Iterators.partition(collect(gss.sysdict), length(gss.sysdict) ÷ Threads.nthreads()))
-    Threads.@threads for chunk in chunks
-        results = [inner(config, sys) for (config, sys) in chunk]
-        lock(lk) do 
-            for row in results
-                push!(df, row)
-            end
-        end
-    end
-    return df
-    Threads.@threads for (config, sys) in collect(gss.sysdict)
-        local sim, sm
-        try
-            (sim, sm) = runSim(sys, change, ResidualModel, tspan, IDA(), dtmax, run_transient)
-        catch error
-            lock(lk) do
-                push!(df, (config..., missing, missing, Array{Missing}(missing, transient_results_length)..., string(error)))
-            end
-        else
-            if string(sim.status) != "SIMULATION_FINALIZED"
-                lock(lk) do
-                    push!(df, (config..., sm.eigenvalues, sm.eigenvectors, Array{Missing}(missing, transient_results_length)..., string(sim.status)))
-                end
-            else
-                res = read_results(sim)
-                inverters = [i for i in get_components(DynamicInverter, sys) if i.name in keys(gen_dict)]
-                inverters = Dict(map(x->gen_dict[x], get_name.(inverters)) .=> inverters)
-                generators = [i for i in get_components(DynamicGenerator, sys) if i.name in keys(gen_dict)]
-                generators = Dict(map(x->gen_dict[x], get_name.(generators)) .=> generators)
-
-                lock(lk) do
-                    push!(df, (
-                        config..., 
-                        sm.eigenvalues, 
-                        sm.eigenvectors, 
-                        [get_voltage_magnitude_series(res, i)[2] for i in get_number.(get_components(Bus, gss.base))]...,
-                        [(i in keys(inverters) ? current_magnitude(res, inverters[i].name) : missing) for i in get_number.(gen_busses)]...,
-                        [(i in keys(generators) ? generator_speed(res, generators[i].name) : missing) for i in get_number.(gen_busses)]...,
-                        string(sim.status)
-                    ))
+                    string(sim.status),
+                    time
+                    )
                 end
             end
         end
+        
+        lk = ReentrantLock()
+        Threads.@threads for (key, val) in collect(gss.sysdict)
+            results = inner(key, val)
+            lock(lk) do 
+                push!(df, results)
+            end
+            i = Threads.atomic_add!(counter, 1) + 1
+            println("finished solve $i/$length in $(round(Int(time)/1e9, 2))s ($(round(100.0*counter/total))%)")
+        end
+        return df
     end
-    return df
-end
 
 
+"""
+extract array of current magnitude over time at the object with name `name` from the simulation results `res`.
 
-function current_magnitude(res, name)
+Timestamps are thrown away. If you're using the GridSearchSystem, the returned array will correspond to an even time grid with spacing `dtmax` (the argument you passed to [`executeSims`](@ref), default 0.02s).
+"""
+function current_magnitude(res::SimulationResults, name::String)
     _, ir = get_state_series(res, (name, :ir_cnv))
     _, ii = get_state_series(res, (name, :ii_cnv))
     return sqrt.(ir.^2 .+ ii.^2)
 end
 
-function generator_speed(res, name)
+"""
+extracts generator speed time series from `res`. Time discretization is even `dtmax` (the argument you passed to [`executeSims`](@ref), default 0.02s)
+"""
+function generator_speed(res::SimulationResults, name::String)
     return get_state_series(res, (name, :ω))[2]
 end
 
+"""
+expand line and load param columns into each individual parameter. This improves usability of the resulting dataframe, and makes saving to TSV cleaner.
+
+Simply adds a column for each attribute of the line parameter struct and/or the load parameter struct.
+"""
 function expand!(df)
     if "Line Params" in names(df)
         for i in fieldnames(LineModelParams)
@@ -270,21 +313,22 @@ function expand!(df)
     select!(df, Not([:"Line Params", :"ZIPE Load Params"]))
 end
 
-function runSim(system, change=BranchTrip(0.5, ACBranch, "Bus 5-Bus 4-i_1"), model=ResidualModel, tspan=(0., 5.), solver=IDA(), dtmax=0.02, run_transient=true)
-    """little wrapper to run simulations
-    
-    Args:
-        system: the system to simulate
-        change: perturbation to apply for the transient sim
-        model: model to pass into Simulation()
-        tspan: time span for transient simulation
-        solver: DE solver for transient simulation
-        dtmax: maximum timestep for DE solver
-        run_transient: whether or not to actually perform the transient simulation
-    
-    Returns:
-        (sim, sm): the Simulation object (sim) and the small signal analysis object (sm)
-    """
+"""little wrapper to run simulations
+
+## Args:
+ - `system`: the system to simulate
+ - `change`: perturbation to apply for the transient sim
+ - `model`: model to pass into Simulation()
+ - `tspan`: time span for transient simulation
+ - `solver`: DE solver for transient simulation
+ - `dtmax`: maximum timestep for DE solver
+ - `run_transient`: whether or not to actually perform the transient simulation
+
+## Returns:
+ - `(Simulation, SmallSignalOutput, UInt64)`: the Simulation object, the small signal analysis object, and the time in nanoseconds the simulation took
+"""
+function runSim(system, change=BranchTrip(0.5, ACBranch, "Bus 5-Bus 4-i_1"), model=ResidualModel, tspan=(0., 5.), solver=IDA(linear_solver=:LapackDense, max_convergence_failures=5), dtmax=0.02, run_transient=true)
+    tic = Base.time_ns()
     sim = Simulation(
         model,
         system,
@@ -303,21 +347,35 @@ function runSim(system, change=BranchTrip(0.5, ACBranch, "Bus 5-Bus 4-i_1"), mod
             enable_progress_bar = false, # with multithreading it's meaningless anyways
         )
     end
-    return (sim, sm)
+    toc = Base.time_ns()
+    # println("FINISHED A SOLVE")
+    return (sim, sm, toc-tic)
 end
 
-function get_permutations(iterable, k)
-    """gets all permutations of `iterable` of length `k` with replacement.
+"""
+gets all permutations of `iterable` of length `k` with replacement.
 
-    Args:
-        iterable (Iterable): some iterable (with well-defined length and indexing)
-        k (Int): desired permutation length
-    
-    Returns:
-        Base.Generator: Generator of vectors of length `k` of combinations of elements of `iterable`
-    """
+## Args
+- `iterable` : some iterable (with well-defined length and indexing)
+- `k::Int` : desired permutation length
+
+## Returns
+- `Base.Generator`: Generator of vectors of length `k` of combinations of elements of `iterable`
+
+## Examples
+```jldoctest
+julia> collect(get_permutations([1, 2], 2))
+4-element Vector{Vector{Int64}}:
+ [1, 1]
+ [1, 2]
+ [2, 1]
+ [2, 2]
+```
+"""
+function get_permutations(iterable, k)
     # yes this is really the best way I could think of.
     # computes all k-digit numbers in base-n, and then indexes `iterable` with the digits.
     n = length(iterable)
     return ([iterable[parse(Int, j, base=n)+1] for j in string(i, base=n, pad=k)] for i in 0:(n^k-1))
 end
+

@@ -123,7 +123,7 @@ function zipe_gridsearch(systems, params)
             # try/catch block to catch simulation convergence errors
             try
                 # runSim is from sysbuilder.jl
-                (sim, sm) = runSim(
+                (sim, sm, time) = runSim(
                     sys, # system to simulate
                     BranchTrip(0.5, ACBranch, first(get_components(ACBranch, sys)).name), # perturbation
                     ResidualModel, # model to use (we're using IDA so this is the right one)
