@@ -9,6 +9,7 @@ using ZIPE_loads
 using TLmodels
 using Combinatorics
 using Sundials
+using DifferentialEquations
 using ArgCheck
 using DataFrames
 import Logging
@@ -29,7 +30,7 @@ makes all configurations of the given system and injectors, or specific given co
 ## Args:
  - `sys::System` : the base system to work off of
  - `injectors` (array of `DynamicInjection`): injectors to use. if one dimensional, all configurations of the given injectors will be returned. If 2d, each row of `injectors` will represent output configuration.
- - `busgroups` (array of String or array of `Vector{String}`, optional): if just array of strings, represents list of buses to consider. If array of Vector{String}, each vector of bus names will be grouped together and always receive the same injector type. 
+ - `busgroups` (array of String or array of `Vector{String}`, optional): if just array of strings, represents list of buses to consider. If array of Vector{String}, each vector of bus names will be grouped together and always receive the same injector type. If not passed, just considers all busses with Generators attached.
 
 ## Returns:
  - `Dict{Vector{String}, System}`: dictionary of {generator names (ordered) => system}. contains all variations.
@@ -123,6 +124,10 @@ function add_result!(gss::GridSearchSys, title::String, getter::Function)
     push!(gss.results_getters, getter)
 end
 
+function add_result!(gss::GridSearchSys, titles::Vector{String}, getter::Function)
+    push!(gss.results_header, titles...)
+    push!(gss.results_getters, getter)
+end
 
 """
 constructor for GridSearchSys with the exact same behavior as [`makeSystems`](@ref).
@@ -145,12 +150,14 @@ end
 """
 Adds a ZIPE load sweep to a GridSearchSys. Pass in a standard load to base the ZIPE load off of, and a vector of LoadParams structs to test.
 
-The standard load should be a function which takes in a system and returns an appropriate load.
+The standard load should be a function which takes in a system and returns an appropriate load. if `missing`, won't add any standard loads.
 """
-function add_zipe_sweep!(gss::GridSearchSys, standardLoadFunction::Function, zipe_params::Vector{LoadParams})
+function add_zipe_sweep!(gss::GridSearchSys, standardLoadFunction::Union{Function, Missing}, zipe_params::Vector{LoadParams})
     sysdict = deepcopy(gss.sysdict)
-    for s in values(sysdict)
-        add_component!(s, standardLoadFunction(s))
+    if !(standardLoadFunction isa Missing)
+        for s in values(sysdict)
+            add_component!(s, standardLoadFunction(s))
+        end
     end
     gss.sysdict = Dict()
     for params in zipe_params
@@ -204,11 +211,12 @@ run simulations on all of the systems in the gridsearch and store the results in
 fully parallelized. Be aware that the memory usage is quite high.
 
 ## Args
- - gss::GridSearchSys : the systems
- - change : perturbation to apply to the system
- - tspan::Tuple{Float64, Float64} : time interval (in seconds) to simulate.
- - dtmax::Float64 : max timestep for solver, and resolution of saved timeseries results
- - run_transient::Bool : whether or not to run the transient simulations.
+ - `gss::GridSearchSys` : the systems
+ - `change::Perturbation` : perturbation to apply to the system
+ - `tspan::Tuple{Float64, Float64}` : time interval (in seconds) to simulate.
+ - `dtmax::Float64` : max timestep for solver (make sure λh is in the feasible region for the solver)
+ - `output_res::Float64` : resolution of saved timeseries results
+ - `run_transient::Bool` : whether or not to run the transient simulations.
 
 ## Returns
 dataframe of results, with the following columns:
@@ -217,7 +225,7 @@ dataframe of results, with the following columns:
 | gss.header                  | Everything in the GridSearchSys's header (all each individual columns). This is the system configuration.                              |
 | eigenvalues                 | λ's from the small signal analysis.                                                                                                    |
 | eigenvectors                | Eigenvectors from the small signal analysis.                                                                                           |
-| Voltage at Bus \$n          | Voltage time series, with timesteps `dtmax`, at each bus. One column per bus.                                                          |
+| Voltage at Bus \$n          | Voltage time series at each bus. One column per bus.                                                                                   |
 | Inverter Current at Bus \$n | Inverter current magnitude at bus \$n, or `missing` if there is no inverter there. One column per bus.                                 |
 | Generator Speed at Bus \$n  | Angular velocity of generator at bus \$n, or `missing` if there is no generator there. One column per bus.                             |
 | Simulation Status           | String representation of either the simulation status or the error caught during the call to [`runSim`](@ref).                         |
@@ -226,54 +234,30 @@ dataframe of results, with the following columns:
 the columns `eigenvalues` and `eigenvectors` may be `missing` if the small signal analysis failed to converge.
 The columns with transient simulation results and the Simulation Time column may be `missing` if the small signal analysis or the transient simulation failed.
 """
-function executeSims(gss::GridSearchSys, change, tspan::Tuple{Float64, Float64}=(0.0, 3.0), dtmax=0.02, run_transient::Bool=true)
-    gen_busses = collect(get_bus.(get_components(Generator, gss.base)))
-    gen_dict = Dict(get_name.(get_components(Generator, gss.base)) .=> get_number.(gen_busses))
-    bus_voltages = (x->"Voltage at Bus $(get_number(x))").(get_components(Bus, gss.base))
-    inverter_currents = (x->"Inverter Current at Bus $(get_number(x))").(gen_busses)
-    generator_speeds = (x->"Generator Speed at Bus $(get_number(x))").(gen_busses)
-    cols = [gss.header..., "eigenvalues", "eigenvectors", bus_voltages..., inverter_currents..., generator_speeds..., "Simulation Status", "Simulation Time (ns)"]
-    transient_results_length = length(bus_voltages) + length(inverter_currents) + length(generator_speeds)
-    df = DataFrame([i=>[] for i in cols])
+function executeSims(gss::GridSearchSys, change::PSID.Perturbation, tspan::Tuple{Float64, Float64}=(0.0, 3.0), dtmax=0.0001, output_res=0.0001, run_transient::Bool=true)
+    # gen_busses = collect(get_bus.(get_components(Generator, gss.base)))
+    # gen_dict = Dict(get_name.(get_components(Generator, gss.base)) .=> get_number.(gen_busses))
+    # bus_voltages = (x->"Voltage at Bus $(get_number(x))").(get_components(Bus, gss.base))
+    # inverter_currents = (x->"Inverter Current at Bus $(get_number(x))").(gen_busses)
+    # generator_speeds = (x->"Generator Speed at Bus $(get_number(x))").(gen_busses)
+    # cols = [gss.header..., "eigenvalues", "eigenvectors", bus_voltages..., inverter_currents..., generator_speeds..., "Simulation Status", "Simulation Time (ns)"]
+
+    df = DataFrame([i=>[] for i in [gss.header..., gss.results_header...]])
     counter = Threads.Atomic{Int}(0)
     total = length(gss)
     function inner(config::Vector{Any}, sys::System)
-        local sim, sm, time
-        try
-            (sim, sm, time) = runSim(sys, change, ResidualModel, tspan, IDA(linear_solver=:LapackBand, max_convergence_failures=10), dtmax, run_transient)
-        catch error
-            i = Threads.atomic_add!(counter, 1) + 1
-            println("finished solve $i/$total in ----s ($(round(100.0*i/total))%)")
-            return (config..., missing, missing, Array{Missing}(missing, transient_results_length)..., string(error), missing)
-        else
-            i = Threads.atomic_add!(counter, 1) + 1
-            println("finished solve $i/$total in $(round(Int(time)/1e9, digits=2))s ($(round(100.0*i/total))%)")
-            if string(sim.status) != "SIMULATION_FINALIZED"
-                return (config..., sm.eigenvalues, sm.eigenvectors, Array{Missing}(missing, transient_results_length)..., string(sim.status), time)
-            else
-                res = read_results(sim)
-                inverters = [i for i in get_components(DynamicInverter, sys) if i.name in keys(gen_dict)]
-                inverters = Dict(map(x->gen_dict[x], get_name.(inverters)) .=> inverters)
-                generators = [i for i in get_components(DynamicGenerator, sys) if i.name in keys(gen_dict)]
-                generators = Dict(map(x->gen_dict[x], get_name.(generators)) .=> generators)
-                
-                return (
-                    config..., 
-                    sm.eigenvalues, 
-                    sm.eigenvectors, 
-                    [get_voltage_magnitude_series(res, i)[2] for i in get_number.(get_components(Bus, gss.base))]...,
-                    [(i in keys(inverters) ? current_magnitude(res, inverters[i].name) : missing) for i in get_number.(gen_busses)]...,
-                    [(i in keys(generators) ? generator_speed(res, generators[i].name) : missing) for i in get_number.(gen_busses)]...,
-                    string(sim.status),
-                    time
-                    )
-            end
-        end
+        (sim, sm, time, error) = runSim(sys, change, ResidualModel, tspan, IDA(; linear_solver=:LapackDense, max_convergence_failures=5), dtmax, output_res, run_transient)
+        i = Threads.atomic_add!(counter, 1) + 1
+        println("finished solve $i/$total in $(round(Int(time)/1e9, digits=2))s ($(round(100.0*i/total))%)")
+
+        return vcat(config, reduce(vcat, (getter(gss, sim, sm, error) for getter in gss.results_getters)))
     end
         
     lk = ReentrantLock()
-    Threads.@threads for (key, val) in collect(gss.sysdict)
+    # Threads.@threads 
+    for (key, val) in collect(gss.sysdict)
         results = inner(key, val)
+        # print(results)
         lock(lk) do 
             push!(df, results)
         end
@@ -281,15 +265,15 @@ function executeSims(gss::GridSearchSys, change, tspan::Tuple{Float64, Float64}=
     return df
 end
 
-function get_eigenvalues(_gss::GridSearchSys, _sim::Simulation, sm::PSID.SmallSignalOutput)
+function get_eigenvalues(_gss::GridSearchSys, _sim::Union{Simulation, Missing}, sm::Union{PSID.SmallSignalOutput, Missing}, _error::Union{String, Missing})
     return sm isa Missing ? missing : [sm.eigenvalues]
 end
 
-function get_eigenvectors(_gss::GridSearchSys, _sim::Simulation, sm::PSID.SmallSignalOutput)
+function get_eigenvectors(_gss::GridSearchSys, _sim::Union{Simulation, Missing}, sm::Union{PSID.SmallSignalOutput, Missing}, _error::Union{String, Missing})
     return sm isa Missing ? missing : [sm.eigenvectors]
 end
 
-function get_bus_voltages(gss::GridSearchSys, sim::Simulation, _sm::PSID.SmallSignalOutput)
+function get_bus_voltages(gss::GridSearchSys, sim::Union{Simulation, Missing}, _sm::Union{PSID.SmallSignalOutput, Missing}, _error::Union{String, Missing})
     if sim isa Missing
         return Array{Missing}(missing, length(get_components(Bus, gss.base)))
     else
@@ -297,7 +281,7 @@ function get_bus_voltages(gss::GridSearchSys, sim::Simulation, _sm::PSID.SmallSi
     end
 end
 
-function get_inverter_currents(gss::GridSearchSys, sim::Simulation, _sm::PSID.SmallSignalOutput)
+function get_inverter_currents(gss::GridSearchSys, sim::Union{Simulation, Missing}, _sm::Union{PSID.SmallSignalOutput, Missing}, _error::Union{String, Missing})
     if sim isa Missing
         return Array{Missing}(missing, length(get_components(Generator, gss.base)))
     end
@@ -308,7 +292,7 @@ function get_inverter_currents(gss::GridSearchSys, sim::Simulation, _sm::PSID.Sm
     return [(i in keys(inverters) ? current_magnitude(res, inverters[i].name) : missing) for i in get_number.(gen_busses)]
 end
 
-function get_generator_speeds(gss::GridSearchSys, sim::Simulation, _sm::PSID.SmallSignalOutput)
+function get_generator_speeds(gss::GridSearchSys, sim::Union{Simulation, Missing}, _sm::Union{PSID.SmallSignalOutput, Missing}, _error::Union{String, Missing})
     if sim isa Missing
         return Array{Missing}(missing, length(get_components(Generator, gss.base)))
     end
@@ -319,10 +303,29 @@ function get_generator_speeds(gss::GridSearchSys, sim::Simulation, _sm::PSID.Sma
     return [(i in keys(generators) ? generator_speed(res, generators[i].name) : missing) for i in get_number.(gen_busses)]
 end
 
-function get_sim_status(_gss::GridSearchSys, sim::Simulation, _sm::PSID.SmallSignalOutput)
+function get_zipe_load_voltages(gss::GridSearchSys, sim::Union{Simulation, Missing}, _sm::Union{PSID.SmallSignalOutput, Missing}, _error::Union{String, Missing})
+    if (sim isa Missing) || (sim.results isa Nothing)
+        return Array{Missing}(missing, length(get_components(StandardLoad, gss.base)))
+    end
+    # the [2] here just gets the voltage instead of a tuple of (time, voltage) since we know the time divisions
+    return [get_voltage_magnitude_series(sim.results, i)[2] for i in get_number.(get_bus.(get_components(StandardLoad, gss.base)))]
+end
+
+function get_zipe_load_current_magnitudes(gss::GridSearchSys, sim::Union{Simulation, Missing}, _sm::Union{PSID.SmallSignalOutput, Missing}, _error::Union{String, Missing})
+    if sim isa Missing
+        return Array{Missing}(missing, length(get_components(StandardLoad, gss.base)))
+    end
+    
+    return ([current_magnitude(sim.results, "load_GFL_inverter"*string(get_number(get_bus(load)))).+ current_magnitude(sim.results, load.name) for load in get_components(StandardLoad, gss.base)])
+end
+
+function get_sim_status(_gss::GridSearchSys, sim::Union{Simulation, Missing}, _sm::Union{PSID.SmallSignalOutput, Missing}, _error::Union{String, Missing})
     return (sim isa Missing) ? missing : sim.status
 end
 
+function get_error(_gss::GridSearchSys, _sim::Union{Simulation, Missing}, _sm::Union{PSID.SmallSignalOutput, Missing}, error::Union{String, Missing})
+    return error
+end
 
 """
 extract array of current magnitude over time at the object with name `name` from the simulation results `res`.
@@ -372,34 +375,44 @@ end
  - `tspan`: time span for transient simulation
  - `solver`: DE solver for transient simulation
  - `dtmax`: maximum timestep for DE solver
+ - `output_res`: timestep of returned time series results
  - `run_transient`: whether or not to actually perform the transient simulation
 
 ## Returns:
- - `(Simulation, SmallSignalOutput, UInt64)`: the Simulation object, the small signal analysis object, and the time in nanoseconds the simulation took
+ - `(Simulation, SmallSignalOutput, UInt64, String)`: the Simulation object, the small signal analysis object, the time in nanoseconds the simulation took, and the error message. All but the time might be `missing` if things failed.
 """
-function runSim(system, change=BranchTrip(0.5, ACBranch, "Bus 5-Bus 4-i_1"), model=ResidualModel, tspan=(0., 5.), solver=IDA(linear_solver=:LapackDense, max_convergence_failures=5), dtmax=0.02, run_transient=true)
+function runSim(system, change=BranchTrip(0.5, ACBranch, "Bus 5-Bus 4-i_1"), model=ResidualModel, tspan=(0., 5.), solver=IDA(linear_solver=:LapackBand, max_convergence_failures=5), dtmax=0.001, output_res=0.02, run_transient=true)
     tic = Base.time_ns()
+    local sim, sm
+
     sim = Simulation(
         model,
         system,
         mktempdir(),
         tspan,
-        change,
-        file_level = Logging.Warn,
+        [change],
+        # file_level = Logging.Warn,
     )
-    sm = small_signal_analysis(sim)
-    if run_transient
-        execute!(
-            sim,
-            solver,
-            dtmax = dtmax,
-            saveat = dtmax,
-            enable_progress_bar = false, # with multithreading it's meaningless anyways
-        )
+    try
+        sm = small_signal_analysis(sim)
+    catch err
+        return (sim, missing, Base.time_ns()-tic, "Small Signal Analysis failed with error $err")
     end
-    toc = Base.time_ns()
-    # println("FINISHED A SOLVE")
-    return (sim, sm, (toc-tic)::UInt64)
+    if run_transient
+        try
+            execute!(
+                sim,
+                solver,
+                dtmax = dtmax,
+                saveat = output_res,
+                # enable_progress_bar = false, # with multithreading it's meaningless anyways
+            )
+        catch err
+            return (sim, sm, Base.time_ns()-tic, "Transient sim failed with error $err")
+        end
+    end
+
+    return (sim, sm, Base.time_ns()-tic, missing)
 end
 
 """
