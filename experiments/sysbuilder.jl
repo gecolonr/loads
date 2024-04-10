@@ -13,6 +13,7 @@ using DifferentialEquations
 using ArgCheck
 using DataFrames
 import Logging
+using CSV
 
 const PSY = PowerSystems;
 const PSID = PowerSimulationsDynamics;
@@ -110,8 +111,42 @@ mutable struct GridSearchSys
     sysdict::Dict{Vector{Any}, System}
     results_header::Vector{String}
     results_getters::Vector{Function}
+    df::DataFrame
 end
 
+function load_data!(gss::GridSearchSys, path::String)
+    gss.df = CSV.read(path, DataFrame; delim='\t')
+    function parse_result(item)
+        try
+            return eval(Meta.parse(item))
+        catch
+            return item
+        end
+    end
+    for i in names(gss.df)
+        gss.df[!, i] .= map(parse_result, gss.df[:, i])
+    end
+end
+
+function load_data(path::String)
+    df = CSV.read(path, DataFrame; delim='\t')
+    function parse_result(item)
+        try
+            return eval(Meta.parse(item))
+        catch
+            return item
+        end
+    end
+    for i in names(df)
+        df[!, i] .= map(parse_result, df[:, i])
+    end
+    return df
+end
+
+
+function save_data!(gss::GridSearchSys, path::String)
+    CSV.write(path, gss.df, delim='\t')
+end
 """
 Adds a column to the header. literally just `push!(gss.header, title)`. for cleanliness and encapsulation I guess.
 """
@@ -144,7 +179,7 @@ function GridSearchSys(sys::System, injectors::Union{AbstractArray{DynamicInject
         header = [join(i, ", ") for i in busgroups]
     end
     header = (x->"injector at {$x}").(header)
-    return GridSearchSys(sys, header, sysdict, Vector(), Vector())
+    return GridSearchSys(sys, header, sysdict, Vector(), Vector(), DataFrame())
 end
 
 """
@@ -234,7 +269,7 @@ dataframe of results, with the following columns:
 the columns `eigenvalues` and `eigenvectors` may be `missing` if the small signal analysis failed to converge.
 The columns with transient simulation results and the Simulation Time column may be `missing` if the small signal analysis or the transient simulation failed.
 """
-function executeSims(gss::GridSearchSys, change::PSID.Perturbation, tspan::Tuple{Float64, Float64}=(0.0, 3.0), dtmax=0.0001, output_res=0.0001, run_transient::Bool=true)
+function executeSims!(gss::GridSearchSys, change::PSID.Perturbation, tspan::Tuple{Float64, Float64}=(0.0, 3.0), dtmax=0.0001, output_res=0.0001, run_transient::Bool=true)
     # gen_busses = collect(get_bus.(get_components(Generator, gss.base)))
     # gen_dict = Dict(get_name.(get_components(Generator, gss.base)) .=> get_number.(gen_busses))
     # bus_voltages = (x->"Voltage at Bus $(get_number(x))").(get_components(Bus, gss.base))
@@ -242,7 +277,7 @@ function executeSims(gss::GridSearchSys, change::PSID.Perturbation, tspan::Tuple
     # generator_speeds = (x->"Generator Speed at Bus $(get_number(x))").(gen_busses)
     # cols = [gss.header..., "eigenvalues", "eigenvectors", bus_voltages..., inverter_currents..., generator_speeds..., "Simulation Status", "Simulation Time (ns)"]
 
-    df = DataFrame([i=>[] for i in [gss.header..., gss.results_header...]])
+    gss.df = DataFrame([i=>[] for i in [gss.header..., gss.results_header...]])
     counter = Threads.Atomic{Int}(0)
     total = length(gss)
     function inner(config::Vector{Any}, sys::System)
@@ -259,10 +294,9 @@ function executeSims(gss::GridSearchSys, change::PSID.Perturbation, tspan::Tuple
         results = inner(key, val)
         # print(results)
         lock(lk) do 
-            push!(df, results)
+            push!(gss.df, results)
         end
     end
-    return df
 end
 
 function get_eigenvalues(_gss::GridSearchSys, _sim::Union{Simulation, Missing}, sm::Union{PSID.SmallSignalOutput, Missing}, _error::Union{String, Missing})
@@ -350,20 +384,24 @@ expand line and load param columns into each individual parameter. This improves
 
 Simply adds a column for each attribute of the line parameter struct and/or the load parameter struct.
 """
-function expand!(df)
-    if "Line Params" in names(df)
+function expand_columns!(gss::GridSearchSys)
+    if "Line Params" in names(gss.df)
         for i in fieldnames(LineModelParams)
-            df[!, i] = (x->x isa Missing ? missing : getfield(x, i)).(df.var"Line Params")
+            gss.df[!, i] = (x->x isa Missing ? missing : getfield(x, i)).(gss.df.var"Line Params")
         end
     end
 
-    if "ZIPE Load Params" in names(df)
+    if "ZIPE Load Params" in names(gss.df)
         for i in fieldnames(LoadParams)
-            df[!, i] = (x->x isa Missing ? missing : getfield(x, i)).(df.var"ZIPE Load Params")
+            gss.df[!, i] = (x->x isa Missing ? missing : getfield(x, i)).(gss.df.var"ZIPE Load Params")
         end
     end
 
-    select!(df, Not([:"Line Params", :"ZIPE Load Params"]))
+    select!(gss.df, Not([:"Line Params", :"ZIPE Load Params"]))
+end
+
+function unexpand_columns!(gss::GridSearchSys)
+    # TODO: fill out this function
 end
 
 """little wrapper to run simulations

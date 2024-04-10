@@ -84,7 +84,7 @@ line_params = LineModelParams(
     Z_c,
     M,
     line_length_dict,    
-    get_name(first(get_components(Line, s))), # this is never used i think
+    get_name(first(get_components(Line, s))),
     10.0,
     1.0,
     1.0
@@ -93,7 +93,7 @@ line_params = LineModelParams(
 line_adders = Dict{String, Function}([
     "statpi"=>create_statpi_system,
     "dynpi"=>create_dynpi_system,
-    "MSSB"=>create_MSSB_system,
+    # "MSSB"=>create_MSSB_system,
 ])
 
 ##################################################################
@@ -132,8 +132,9 @@ add_result!(gss, ["Load Current at $busname" for busname in get_name.(get_bus.(g
 add_result!(gss, "Simulation Status", get_sim_status)
 add_result!(gss, "Error", get_error)
 
-results_df = executeSims(gss, BranchTrip(0.5, ACBranch, line_params.alg_line_name), (0.48, 0.55))
+executeSims!(gss, BranchTrip(0.5, ACBranch, line_params.alg_line_name), (0.48, 0.55))
+expand_columns!(gss)
+save_data!(gss, "data/results.tsv")
 
-expand!(results_df)
 
-CSV.write("data/results.tsv", results_df, delim='\t')
+df = load_data("data/results.tsv")
