@@ -14,6 +14,7 @@ using ArgCheck
 using DataFrames
 import Logging
 using CSV
+using Serialization
 
 const PSY = PowerSystems;
 const PSID = PowerSimulationsDynamics;
@@ -143,8 +144,15 @@ function load_data(path::String)
     return df
 end
 
+function load_sim_objects(gss::GridSearchSys)
+    gss.df[!, :sim] .= [(i isa Missing ? missing : Serialization.deserialize(i)) for i in gss.df[!, :sim_filename]]
+end
 
-function save_data!(gss::GridSearchSys, path::String)
+function load_sim_objects(df::DataFrame)
+    df[!, :sim] .= [(i isa Missing ? missing : Serialization.deserialize(i)) for i in df[!, :sim_filename]]
+end
+
+function save_data(gss::GridSearchSys, path::String)
     CSV.write(path, gss.df, delim='\t')
 end
 """
@@ -269,7 +277,7 @@ dataframe of results, with the following columns:
 the columns `eigenvalues` and `eigenvectors` may be `missing` if the small signal analysis failed to converge.
 The columns with transient simulation results and the Simulation Time column may be `missing` if the small signal analysis or the transient simulation failed.
 """
-function executeSims!(gss::GridSearchSys, change::PSID.Perturbation, tspan::Tuple{Float64, Float64}=(0.0, 3.0), dtmax=0.0001, output_res=0.0001, run_transient::Bool=true)
+function executeSims!(gss::GridSearchSys, change::PSID.Perturbation, tspan::Tuple{Float64, Float64}=(0.0, 3.0), dtmax=0.0001, output_res=0.0001, run_transient::Bool=true, log_path::String="data/sims")
     # gen_busses = collect(get_bus.(get_components(Generator, gss.base)))
     # gen_dict = Dict(get_name.(get_components(Generator, gss.base)) .=> get_number.(gen_busses))
     # bus_voltages = (x->"Voltage at Bus $(get_number(x))").(get_components(Bus, gss.base))
@@ -281,7 +289,7 @@ function executeSims!(gss::GridSearchSys, change::PSID.Perturbation, tspan::Tupl
     counter = Threads.Atomic{Int}(0)
     total = length(gss)
     function inner(config::Vector{Any}, sys::System)
-        (sim, sm, time, error) = runSim(sys, change, ResidualModel, tspan, IDA(; linear_solver=:LapackDense, max_convergence_failures=5), dtmax, output_res, run_transient)
+        (sim, sm, time, error) = runSim(sys, change, ResidualModel, tspan, IDA(; linear_solver=:LapackDense, max_convergence_failures=5), dtmax, output_res, run_transient, log_path)
         i = Threads.atomic_add!(counter, 1) + 1
         println("finished solve $i/$total in $(round(Int(time)/1e9, digits=2))s ($(round(100.0*i/total))%)")
 
@@ -297,6 +305,18 @@ function executeSims!(gss::GridSearchSys, change::PSID.Perturbation, tspan::Tupl
             push!(gss.df, results)
         end
     end
+end
+function get_serialized_sim_filename_function_builder(path::String)
+    mkdir(path)
+    function get_serialized_sim_filename(_gss::GridSearchSys, sim::Union{Simulation, Missing}, _sm::Union{PSID.SmallSignalOutput, Missing}, _error::Union{String, Missing})
+        if sim isa Missing
+            return missing
+        end
+        filename = "$(path)/SimObject$(time_ns()).jls"
+        Serialization.serialize(filename, sim)
+        return [filename]
+    end
+    return get_serialized_sim_filename
 end
 
 function get_eigenvalues(_gss::GridSearchSys, _sim::Union{Simulation, Missing}, sm::Union{PSID.SmallSignalOutput, Missing}, _error::Union{String, Missing})
@@ -346,7 +366,7 @@ function get_zipe_load_voltages(gss::GridSearchSys, sim::Union{Simulation, Missi
 end
 
 function get_zipe_load_current_magnitudes(gss::GridSearchSys, sim::Union{Simulation, Missing}, _sm::Union{PSID.SmallSignalOutput, Missing}, _error::Union{String, Missing})
-    if sim isa Missing
+    if (sim isa Missing) || (sim.results isa Nothing)
         return Array{Missing}(missing, length(get_components(StandardLoad, gss.base)))
     end
     
@@ -359,6 +379,10 @@ end
 
 function get_error(_gss::GridSearchSys, _sim::Union{Simulation, Missing}, _sm::Union{PSID.SmallSignalOutput, Missing}, error::Union{String, Missing})
     return error
+end
+
+function get_sim(_gss::GridSearchSys, sim::Union{Simulation, Missing}, _sm::Union{PSID.SmallSignalOutput, Missing}, _error::Union{String, Missing})
+    return sim
 end
 
 """
@@ -419,17 +443,16 @@ end
 ## Returns:
  - `(Simulation, SmallSignalOutput, UInt64, String)`: the Simulation object, the small signal analysis object, the time in nanoseconds the simulation took, and the error message. All but the time might be `missing` if things failed.
 """
-function runSim(system, change=BranchTrip(0.5, ACBranch, "Bus 5-Bus 4-i_1"), model=ResidualModel, tspan=(0., 5.), solver=IDA(linear_solver=:LapackBand, max_convergence_failures=5), dtmax=0.001, output_res=0.02, run_transient=true)
+function runSim(system, change=BranchTrip(0.5, ACBranch, "Bus 5-Bus 4-i_1"), model=ResidualModel, tspan=(0., 5.), solver=IDA(linear_solver=:LapackBand, max_convergence_failures=5), dtmax=0.001, output_res=0.02, run_transient=true, log_path::String="data/sims")
     tic = Base.time_ns()
     local sim, sm
 
     sim = Simulation(
         model,
         system,
-        mktempdir(),
+        log_path,
         tspan,
         [change],
-        # file_level = Logging.Warn,
     )
     try
         sm = small_signal_analysis(sim)
