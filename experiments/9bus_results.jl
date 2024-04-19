@@ -15,12 +15,7 @@ using LaTeXStrings
 using PyPlot
 const plt = PyPlot
 using Sundials
-using SciMLBase
-using ModelingToolkit
-
 using ForwardDiff
-using SparseArrays
-using SymbolicIndexingInterface
 
 pygui(true)
 
@@ -29,7 +24,7 @@ include("../data/build_scripts/device_models.jl")
 
 df = load_serde_data("data/results.jls")
 
-
+df = gss.df
 # Eigenvalue Plot
 function eigplot()
     eigs = [
@@ -64,20 +59,56 @@ function maxeigbox()
     axs[2].boxplot(sta, vert=false)
     axs[1].set_title("dynpi")
     axs[2].set_title("statpi")
+    axs[1].set_xscale("log")
     fig.suptitle(L"\max_{i}\: \mathrm{Re}(\lambda_i)")
     plt.show()
 end
 
 function transient()
-    data = @subset df begin
+    dynpidata = @subset df begin
+        # :"Load Voltage at Bus 5"
+        :"Line Model" .== "dynpi"
+        :"injector at {Bus 3}" .== "GFM"
+        :"injector at {Bus 2}" .== "SM"
+        :"injector at {Bus1}" .== "GFM"
+    end
+    statpidata = @subset df begin
         # :"Load Voltage at Bus 5"
         :"Line Model" .== "statpi"
         :"injector at {Bus 3}" .== "GFM"
         :"injector at {Bus 2}" .== "SM"
         :"injector at {Bus1}" .== "GFM"
     end
-    plt.plot(0.48:0.0001:0.55, data.var"Load Voltage at Bus 5"[1])
+
+    # busses = ["Load Voltage at $i" for i in get_name.(get_components(Bus, df.sim[1].sys))]
+    busses = ["Load Voltage at $i" for i in get_name.(get_bus.(get_components(StandardLoad, first(df.sim).sys)))]
+    fig, axs = plt.subplots(2, length(busses), sharex=true)
+    fig.suptitle("Load Voltage at Bus 5 for BranchTrip on line Bus 5-Bus 4-i₁")
+    axs[1].set_ylabel("dynpi")
+    axs[2].set_ylabel("statpi")
+    for (j, bus) in enumerate(busses)
+        for row in eachrow(dynpidata)
+            if row[bus] isa Missing
+                println("dynpi failure: Z=$(row.z_percent), I=$(row.i_percent), P=$(row.p_percent), E=$(row.e_percent)")
+                continue
+            end
+            axs[1, j].plot(0.48:0.0001:0.55, row[bus], label="Z=$(row.z_percent), I=$(row.i_percent), P=$(row.p_percent), E=$(row.e_percent)")
+        end
+        for row in eachrow(statpidata)
+            if row[bus] isa Missing
+                println("statpi failure: Z=$(row.z_percent), I=$(row.i_percent), P=$(row.p_percent), E=$(row.e_percent)")
+                continue
+            end
+            axs[2, j].plot(0.48:0.0001:0.55, row[bus], label="Z=$(row.z_percent), I=$(row.i_percent), P=$(row.p_percent), E=$(row.e_percent)")
+        end
+        axs[1, j].set_title(bus)
+        axs[2, j].set_xlabel("Time (s)")
+        
+        axs[1, j].legend()
+        axs[2, j].legend()
+    end
     plt.xlabel("Time (s)")
-    plt.ylabel("Voltage")
+    # axs[1].set_ylabel("Voltage")
+    # axs[2].set_ylabel("Voltage")
     plt.show()
 end

@@ -14,7 +14,7 @@ using DataFramesMeta
 using LaTeXStrings
 using PyPlot
 const plt = PyPlot
-pygui(true)
+# pygui(true)
 
 include("sysbuilder.jl")
 include("../data/build_scripts/device_models.jl")
@@ -137,7 +137,7 @@ add_result!(gss, "Simulation Status", get_sim_status)
 add_result!(gss, "Error", get_error)
 add_result!(gss, "sim", get_sim)
 
-executeSims!(gss, BranchTrip(0.5, ACBranch, line_params.alg_line_name), (0.48, 0.55), 0.001, 0.001, true, mktempdir())
-
+executeSims!(gss, BranchTrip(0.5, ACBranch, line_params.alg_line_name), (0.48, 0.55), 0.001, 0.0001, true, mktempdir())
+expand_columns!(gss)
 save_serde_data(gss, "data/results.jls")
 

@@ -109,7 +109,7 @@ Use [`executeSims`](@ref) to run simulations for all the systems.
 mutable struct GridSearchSys
     base::System
     header::Vector{String}
-    sysdict::Dict{Vector{Any}, System}
+    sysdict::Dict{Vector{Any}, Function}
     results_header::Vector{String}
     results_getters::Vector{Function}
     df::DataFrame
@@ -199,6 +199,10 @@ constructor for GridSearchSys with the exact same behavior as [`makeSystems`](@r
 """
 function GridSearchSys(sys::System, injectors::Union{AbstractArray{DynamicInjection}, AbstractArray{DynamicInjection, 2}}, busgroups::Union{AbstractArray{Vector{String}}, AbstractArray{String}, Nothing}=nothing)
     sysdict = makeSystems(sys, injectors, busgroups)
+    newsysdict = Dict()
+    for (key, val) in sysdict
+        newsysdict[key] = ((value)->(()->deepcopy(value)))(val)
+    end
     # first fix busgroups
     if isnothing(busgroups) # if nothing was passed
         # just get the name of every generator's bus in the system
@@ -209,7 +213,7 @@ function GridSearchSys(sys::System, injectors::Union{AbstractArray{DynamicInject
         header = [join(i, ", ") for i in busgroups]
     end
     header = (x->"injector at {$x}").(header)
-    return GridSearchSys(sys, header, sysdict, Vector(), Vector(), DataFrame())
+    return GridSearchSys(sys, header, newsysdict, Vector(), Vector(), DataFrame())
 end
 
 """
@@ -221,15 +225,20 @@ function add_zipe_sweep!(gss::GridSearchSys, standardLoadFunction::Union{Functio
     sysdict = deepcopy(gss.sysdict)
     if !(standardLoadFunction isa Missing)
         for s in values(sysdict)
-            add_component!(s, standardLoadFunction(s))
+            s = (s->(()->(sys=s();add_component!(sys, standardLoadFunction(sys));sys)))(s)
         end
+    end
+    function withzipeload(sys, params)
+        withzipe = deepcopy(sys)
+        create_ZIPE_load(withzipe, params)
+        return withzipe
     end
     gss.sysdict = Dict()
     for params in zipe_params
         for (key, val) in sysdict
-            withzipe = deepcopy(val)
-            create_ZIPE_load(withzipe, params)
-            gss.sysdict[[key..., params]] = withzipe
+            # withzipe = deepcopy(val)
+            # create_ZIPE_load(withzipe, params)
+            gss.sysdict[[key..., params]] = ((params, valarg)->(()->withzipeload(valarg(), params)))(params, val)
         end
     end
     add_column!(gss, "ZIPE Load Params")
@@ -248,7 +257,7 @@ function add_lines_sweep!(gss::GridSearchSys, lineParams::Vector{LineModelParams
     for (key, val) in gss.sysdict
         for (linename, creator) in linemodelAdders
             for params in lineParams
-                newsysdict[[key..., linename, params]] = creator(val, params)
+                newsysdict[[key..., linename, params]] = ((val, params, creator)->(()->creator(val(), params)))(val, params, creator)
             end
         end
     end
@@ -311,7 +320,7 @@ function executeSims!(gss::GridSearchSys, change::PSID.Perturbation, tspan::Tupl
     counter = Threads.Atomic{Int}(0)
     total = length(gss)
     function inner(config::Vector{Any}, sys::System)
-        (sim, sm, time, error) = runSim(sys, change, ResidualModel, tspan, IDA(; linear_solver=:LapackDense, max_convergence_failures=5), dtmax, output_res, run_transient, log_path)
+        (sim, sm, time, error) = runSim(sys, change, ResidualModel, tspan, IDA(; linear_solver=:Dense, max_convergence_failures=5), dtmax, output_res, run_transient, log_path)
         i = Threads.atomic_add!(counter, 1) + 1
         println("finished solve $i/$total in $(round(Int(time)/1e9, digits=2))s ($(round(100.0*i/total))%)")
 
@@ -321,7 +330,7 @@ function executeSims!(gss::GridSearchSys, change::PSID.Perturbation, tspan::Tupl
     lk = ReentrantLock()
     # Threads.@threads 
     Threads.@threads for (key, val) in collect(gss.sysdict)
-        results = inner(deepcopy(key), deepcopy(val))
+        results = inner(deepcopy(key), val())
         # print(results)
         lock(lk) do 
             push!(gss.df, results)
@@ -504,6 +513,7 @@ function runSim(system, change=BranchTrip(0.5, ACBranch, "Bus 5-Bus 4-i_1"), mod
                 solver,
                 dtmax = dtmax,
                 saveat = output_res,
+                tstops = [0.5],
                 # enable_progress_bar = false, # with multithreading it's meaningless anyways
             )
         catch err
