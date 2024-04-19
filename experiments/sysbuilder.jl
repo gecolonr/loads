@@ -129,26 +129,48 @@ function load_data!(gss::GridSearchSys, path::String)
     end
 end
 
+function parse_result(item::String)
+    try
+        return eval(Meta.parse(item))
+    catch
+        return item
+    end
+end
+
 function load_data(path::String)
+    println("Loading DataFrame...")
     df = CSV.read(path, DataFrame; delim='\t')
-    function parse_result(item)
-        try
-            return eval(Meta.parse(item))
-        catch
-            return item
-        end
-    end
+    println("DataFrame loaded!")
     for i in names(df)
-        df[!, i] .= map(parse_result, df[:, i])
+        if i == "Eigenvectors"
+            continue
+        end
+        println("Parsing column $i...")
+        lk = ReentrantLock()
+        Threads.@threads for j in 1:length(df[!, i])
+            if !(df[j, i] isa String)
+                continue
+            end
+            try
+                x = eval(Meta.parse(df[j, i]))
+                lock(lk) do 
+                    df[j, i] = x
+                end
+            catch
+                # don't do anything
+            end
+        end
+        # df[!, i] .= map((x)->(x isa String ? parse_result(x) : x), df[:, i])
     end
+    println("DataFrame loaded and parsed!")
     return df
 end
 
-function load_sim_objects(gss::GridSearchSys)
+function load_sim_objects!(gss::GridSearchSys)
     gss.df[!, :sim] .= [(i isa Missing ? missing : Serialization.deserialize(i)) for i in gss.df[!, :sim_filename]]
 end
 
-function load_sim_objects(df::DataFrame)
+function load_sim_objects!(df::DataFrame)
     df[!, :sim] .= [(i isa Missing ? missing : Serialization.deserialize(i)) for i in df[!, :sim_filename]]
 end
 
@@ -298,16 +320,30 @@ function executeSims!(gss::GridSearchSys, change::PSID.Perturbation, tspan::Tupl
         
     lk = ReentrantLock()
     # Threads.@threads 
-    for (key, val) in collect(gss.sysdict)
-        results = inner(key, val)
+    Threads.@threads for (key, val) in collect(gss.sysdict)
+        results = inner(deepcopy(key), deepcopy(val))
         # print(results)
         lock(lk) do 
             push!(gss.df, results)
         end
     end
 end
+"""
+serializes the results dataframe and saves it to `path` to be read later using `Serialization.deserialize`
+"""
+function save_serde_data(gss::GridSearchSys, path::String)
+    Serialization.serialize(path, gss.df)
+end
+function load_serde_data(path::String)
+    return Serialization.deserialize(path)
+end
 function get_serialized_sim_filename_function_builder(path::String)
-    mkdir(path)
+    try
+        mkdir(path)
+    catch
+        println("Failed to create directory $path (maybe it already exists)")
+    end
+
     function get_serialized_sim_filename(_gss::GridSearchSys, sim::Union{Simulation, Missing}, _sm::Union{PSID.SmallSignalOutput, Missing}, _error::Union{String, Missing})
         if sim isa Missing
             return missing
@@ -452,7 +488,9 @@ function runSim(system, change=BranchTrip(0.5, ACBranch, "Bus 5-Bus 4-i_1"), mod
         system,
         log_path,
         tspan,
-        [change],
+        change,
+        disable_timer_outputs=true
+        
     )
     try
         sm = small_signal_analysis(sim)
