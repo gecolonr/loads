@@ -105,6 +105,10 @@ Use [`executeSims`](@ref) to run simulations for all the systems.
 `base` is the base system. It may be modified, but you should always be able to make any of the actual systems by simply adding to the base.
 `header` is a list of the column titles for the dataframe. It should be human-readable.
 `sysdict` stores the systems in the format config::Vector => System.
+`results_header` is a list of column titles for results.
+`results_getters` is a list of functions taking in a GridSearchSystem, Simulation, SmallSignalOutput, and String (error message) which returns results corresponding to `results_header`.
+`df` is a DataFrame which will hold the results.
+`chunksize` is the number of rows to hold in memory at a time (before saving to file).
 """
 mutable struct GridSearchSys
     base::System
@@ -113,22 +117,22 @@ mutable struct GridSearchSys
     results_header::Vector{String}
     results_getters::Vector{Function}
     df::DataFrame
+    chunksize::Union{Int, Float64}
 end
 
+"""
+WARNING: Generally, it's better to use Serialization-based storage, for speed and memory efficiency. This still works, but it's suboptimal.
+
+Load data from Dataframe saved to TSV at `path`. stores this data in gss.df.
+"""
 function load_data!(gss::GridSearchSys, path::String)
-    gss.df = CSV.read(path, DataFrame; delim='\t')
-    function parse_result(item)
-        try
-            return eval(Meta.parse(item))
-        catch
-            return item
-        end
-    end
-    for i in names(gss.df)
-        gss.df[!, i] .= map(parse_result, gss.df[:, i])
-    end
+    gss.df = load_data(path)
 end
 
+"""
+helper function for `load_data`
+tries to parse the string. if that fails, just return the string.
+"""
 function parse_result(item::String)
     try
         return eval(Meta.parse(item))
@@ -137,6 +141,11 @@ function parse_result(item::String)
     end
 end
 
+"""
+WARNING: Generally, it's better to use Serialization-based storage, for speed and memory efficiency. This still works, but it's suboptimal.
+
+Load data from Dataframe saved to TSV at `path`.
+"""
 function load_data(path::String)
     println("Loading DataFrame...")
     df = CSV.read(path, DataFrame; delim='\t')
@@ -166,14 +175,10 @@ function load_data(path::String)
     return df
 end
 
-function load_sim_objects!(gss::GridSearchSys)
-    gss.df[!, :sim] .= [(i isa Missing ? missing : Serialization.deserialize(i)) for i in gss.df[!, :sim_filename]]
-end
-
-function load_sim_objects!(df::DataFrame)
-    df[!, :sim] .= [(i isa Missing ? missing : Serialization.deserialize(i)) for i in df[!, :sim_filename]]
-end
-
+"""
+WARNING: This is very inefficient. Use Serialization with `save_serde_data` instead.
+Save the data in `gss.df` to TSV.
+"""
 function save_data(gss::GridSearchSys, path::String)
     CSV.write(path, gss.df, delim='\t')
 end
@@ -184,20 +189,45 @@ function add_column!(gss::GridSearchSys, title)
     push!(gss.header, title)
 end
 
+"""
+Add a column to the output dataframe with a result to store.
+
+`getter` must have the following signature:
+(GridSearchSys, Simulation, SmallSignalOutput, String)->(Any)
+
+Any of the inputs might be `missing`.
+"""
 function add_result!(gss::GridSearchSys, title::String, getter::Function)
     push!(gss.results_header, title)
     push!(gss.results_getters, getter)
 end
 
+"""
+add multiple columns to the output dataframe with results to store. 
+
+`getter` must have the following signature:
+(GridSearchSys, Simulation, SmallSignalOutput, String)->(Vector{Any})
+
+the output vector must be the same length as `titles` (the column titles), and any of the inputs might be `missing`.
+"""
 function add_result!(gss::GridSearchSys, titles::Vector{String}, getter::Function)
     push!(gss.results_header, titles...)
     push!(gss.results_getters, getter)
+end
+"""
+set the number of rows save in each file (and thus how many to hold in memory before saving to file).
+
+Set to `Inf` to hold all rows in memory (useful for small datasets and to allow use of the dataframe immediately after running the sims)
+"""
+function set_chunksize(gss::GridSearchSys, chunksize::Union{Int, Float64})
+    @assert chunksize>=1.0 "invalid chunksize: can't save chunks of zero or negative size"
+    gss.chunksize = chunksize
 end
 
 """
 constructor for GridSearchSys with the exact same behavior as [`makeSystems`](@ref).
 """
-function GridSearchSys(sys::System, injectors::Union{AbstractArray{DynamicInjection}, AbstractArray{DynamicInjection, 2}}, busgroups::Union{AbstractArray{Vector{String}}, AbstractArray{String}, Nothing}=nothing)
+function GridSearchSys(sys::System, injectors::Union{AbstractArray{DynamicInjection}, AbstractArray{DynamicInjection, 2}}, busgroups::Union{AbstractArray{Vector{String}}, AbstractArray{String}, Nothing}=nothing, chunksize::Union{Int, Float64}=Inf)
     sysdict = makeSystems(sys, injectors, busgroups)
     newsysdict = Dict()
     for (key, val) in sysdict
@@ -213,7 +243,7 @@ function GridSearchSys(sys::System, injectors::Union{AbstractArray{DynamicInject
         header = [join(i, ", ") for i in busgroups]
     end
     header = (x->"injector at {$x}").(header)
-    return GridSearchSys(sys, header, newsysdict, Vector(), Vector(), DataFrame())
+    return GridSearchSys(sys, header, newsysdict, Vector(), Vector(), DataFrame(), chunksize)
 end
 
 """
@@ -282,8 +312,6 @@ end
 """
 run simulations on all of the systems in the gridsearch and store the results in a DataFrame.
 
-fully parallelized. Be aware that the memory usage is quite high.
-
 ## Args
  - `gss::GridSearchSys` : the systems
  - `change::Perturbation` : perturbation to apply to the system
@@ -291,61 +319,83 @@ fully parallelized. Be aware that the memory usage is quite high.
  - `dtmax::Float64` : max timestep for solver (make sure λh is in the feasible region for the solver)
  - `output_res::Float64` : resolution of saved timeseries results
  - `run_transient::Bool` : whether or not to run the transient simulations.
+ - `log_path` : folder where outputs will be saved (when chunksize is reached). 
 
-## Returns
-dataframe of results, with the following columns:
-| column name                 | content                                                                                                                                |
-| --------------------------- | -------------------------------------------------------------------------------------------------------------------------------------- |
-| gss.header                  | Everything in the GridSearchSys's header (all each individual columns). This is the system configuration.                              |
-| eigenvalues                 | λ's from the small signal analysis.                                                                                                    |
-| eigenvectors                | Eigenvectors from the small signal analysis.                                                                                           |
-| Voltage at Bus \$n          | Voltage time series at each bus. One column per bus.                                                                                   |
-| Inverter Current at Bus \$n | Inverter current magnitude at bus \$n, or `missing` if there is no inverter there. One column per bus.                                 |
-| Generator Speed at Bus \$n  | Angular velocity of generator at bus \$n, or `missing` if there is no generator there. One column per bus.                             |
-| Simulation Status           | String representation of either the simulation status or the error caught during the call to [`runSim`](@ref).                         |
-| Simulation Time (ns)        | Time in nanoseconds to build the simulation, perform the small signal analysis, and (if `run_transient`) run the transient simulation. | 
+Whenever the number of rows in `gss.df` reaches `gss.chunksize`, results will be saved to file then deleted from gss.df in order to limit total memory usage.
 
-the columns `eigenvalues` and `eigenvectors` may be `missing` if the small signal analysis failed to converge.
-The columns with transient simulation results and the Simulation Time column may be `missing` if the small signal analysis or the transient simulation failed.
+If `gss.chunksize` is finite, the final dataframe will be saved. This way all results will be saved, even the last chunk or if `chunksize` was not reached.
+In this case, the final chunk will also be deleted from gss.df.
+
+To not save anything to file and keep the results in gss.df, make sure to `set_chunksize(gss, Inf)`.
 """
-function executeSims!(gss::GridSearchSys, change::PSID.Perturbation, tspan::Tuple{Float64, Float64}=(0.0, 3.0), dtmax=0.0001, output_res=0.0001, run_transient::Bool=true, log_path::String="data/sims")
+function executeSims!(gss::GridSearchSys, change::PSID.Perturbation, tspan::Tuple{Float64, Float64}=(0.48, 0.55), dtmax=0.0001, output_res=0.0001, run_transient::Bool=true, log_path::String="data/sims")
     # gen_busses = collect(get_bus.(get_components(Generator, gss.base)))
     # gen_dict = Dict(get_name.(get_components(Generator, gss.base)) .=> get_number.(gen_busses))
     # bus_voltages = (x->"Voltage at Bus $(get_number(x))").(get_components(Bus, gss.base))
     # inverter_currents = (x->"Inverter Current at Bus $(get_number(x))").(gen_busses)
     # generator_speeds = (x->"Generator Speed at Bus $(get_number(x))").(gen_busses)
     # cols = [gss.header..., "eigenvalues", "eigenvectors", bus_voltages..., inverter_currents..., generator_speeds..., "Simulation Status", "Simulation Time (ns)"]
-
+    if !isdir(log_path)
+        mkdir(log_path)
+    end
     gss.df = DataFrame([i=>[] for i in [gss.header..., gss.results_header...]])
     counter = Threads.Atomic{Int}(0)
     total = length(gss)
     function inner(config::Vector{Any}, sys::System)
-        (sim, sm, time, error) = runSim(sys, change, ResidualModel, tspan, IDA(; linear_solver=:Dense, max_convergence_failures=5), dtmax, output_res, run_transient, log_path)
+        (sim, sm, time, error) = runSim(sys, change, ResidualModel, tspan, IDA(; linear_solver=:Dense, max_convergence_failures=5), dtmax, output_res, run_transient)
         i = Threads.atomic_add!(counter, 1) + 1
         println("finished solve $i/$total in $(round(Int(time)/1e9, digits=2))s ($(round(100.0*i/total))%)")
 
         return vcat(config, reduce(vcat, (getter(gss, sim, sm, error) for getter in gss.results_getters)))
     end
-        
+    
     lk = ReentrantLock()
-    # Threads.@threads 
+    
+    chunk_counter = 0
     Threads.@threads for (key, val) in collect(gss.sysdict)
         results = inner(deepcopy(key), val())
-        # print(results)
         lock(lk) do 
             push!(gss.df, results)
+            if size(gss.df, 1) >= gss.chunksize
+                save_serde_data(gss, log_path*"/results$(chunk_counter).jls")
+                deleteat!(gss.df, 1:size(gss.df, 1))
+                chunk_counter += 1
+            end
         end
+    end
+    if isfinite(gss.chunksize) && size(gss.df, 1)>0
+        save_serde_data(gss, log_path*"/results$(chunk_counter).jls")
+        deleteat!(gss.df, 1:size(gss.df, 1))
     end
 end
 """
-serializes the results dataframe and saves it to `path` to be read later using `Serialization.deserialize`
+serializes the results dataframe and saves it to `path` to be read later using `Serialization.deserialize` (through `load_serde_data`)
 """
 function save_serde_data(gss::GridSearchSys, path::String)
+    if isfinite(gss.chunksize)
+        @warn "chunksize is finite, so `gss.df` likely does not contain all results. Saving data currently contained in `gss.df`."
+    end
     Serialization.serialize(path, gss.df)
 end
+"""
+Loads serialized dataframe from file or folder.
+
+If `path` is a folder, looks for all non-hidden .jls files, reads them, and concatenates them.
+"""
 function load_serde_data(path::String)
+    if isdir(path)
+        return vcat([load_serde_data(path*"/"*file) for file in readdir(path) if (file[1]!='.')&&(file[end-3:end]==".jls")]...)
+    end
     return Serialization.deserialize(path)
 end
+
+"""
+[This is a results getter function]
+
+WARNING: mostly deprecated. just use `get_sim`.
+
+Saves the `sim` object to file, then returns the filename to be added to the results dataframe.
+"""
 function get_serialized_sim_filename_function_builder(path::String)
     try
         mkdir(path)
@@ -364,14 +414,32 @@ function get_serialized_sim_filename_function_builder(path::String)
     return get_serialized_sim_filename
 end
 
+"""
+[This is a results getter function]
+
+gets system eigenvalues from small signal analysis.
+"""
 function get_eigenvalues(_gss::GridSearchSys, _sim::Union{Simulation, Missing}, sm::Union{PSID.SmallSignalOutput, Missing}, _error::Union{String, Missing})
     return sm isa Missing ? missing : [sm.eigenvalues]
 end
 
+
+"""
+[This is a results getter function]
+
+gets system eigenvectors from small signal analysis.
+"""
 function get_eigenvectors(_gss::GridSearchSys, _sim::Union{Simulation, Missing}, sm::Union{PSID.SmallSignalOutput, Missing}, _error::Union{String, Missing})
     return sm isa Missing ? missing : [sm.eigenvectors]
 end
 
+"""
+[This is a results getter function]
+
+**RETURNS A VECTOR!** use a vector of column titles if you want each bus to be a separate column.
+
+gets voltage time series at every bus in the system.
+"""
 function get_bus_voltages(gss::GridSearchSys, sim::Union{Simulation, Missing}, _sm::Union{PSID.SmallSignalOutput, Missing}, _error::Union{String, Missing})
     if sim isa Missing
         return Array{Missing}(missing, length(get_components(Bus, gss.base)))
@@ -380,7 +448,15 @@ function get_bus_voltages(gss::GridSearchSys, sim::Union{Simulation, Missing}, _
     end
 end
 
+"""
+[This is a results getter function]
+
+**RETURNS A VECTOR!** use a vector of column titles if you want each inverter to be a separate column.
+
+Returns a vector with an entry for each `Generator` in the system. If there's an inverter there, the entry is a time series of the current magnitude. Otherwise, it's `missing`.
+"""
 function get_inverter_currents(gss::GridSearchSys, sim::Union{Simulation, Missing}, _sm::Union{PSID.SmallSignalOutput, Missing}, _error::Union{String, Missing})
+    throw("unimplemented: not working yet")
     if sim isa Missing
         return Array{Missing}(missing, length(get_components(Generator, gss.base)))
     end
@@ -391,7 +467,16 @@ function get_inverter_currents(gss::GridSearchSys, sim::Union{Simulation, Missin
     return [(i in keys(inverters) ? current_magnitude(res, inverters[i].name) : missing) for i in get_number.(gen_busses)]
 end
 
+
+"""
+[This is a results getter function]
+
+**RETURNS A VECTOR!** use a vector of column titles if you want each generator to be a separate column.
+
+gets speed (in rad/s) of all generators in the system.
+"""
 function get_generator_speeds(gss::GridSearchSys, sim::Union{Simulation, Missing}, _sm::Union{PSID.SmallSignalOutput, Missing}, _error::Union{String, Missing})
+    throw("unimplemented: not tested yet")
     if sim isa Missing
         return Array{Missing}(missing, length(get_components(Generator, gss.base)))
     end
@@ -402,6 +487,13 @@ function get_generator_speeds(gss::GridSearchSys, sim::Union{Simulation, Missing
     return [(i in keys(generators) ? generator_speed(res, generators[i].name) : missing) for i in get_number.(gen_busses)]
 end
 
+"""
+[This is a results getter function]
+
+**RETURNS A VECTOR!** use a vector of column titles if you want each load to be a separate column.
+
+Gets the voltage magnitude time series at all ZIPE loads. 
+"""
 function get_zipe_load_voltages(gss::GridSearchSys, sim::Union{Simulation, Missing}, _sm::Union{PSID.SmallSignalOutput, Missing}, _error::Union{String, Missing})
     if (sim isa Missing) || (sim.results isa Nothing)
         return Array{Missing}(missing, length(get_components(StandardLoad, gss.base)))
@@ -410,7 +502,15 @@ function get_zipe_load_voltages(gss::GridSearchSys, sim::Union{Simulation, Missi
     return [get_voltage_magnitude_series(sim.results, i)[2] for i in get_number.(get_bus.(get_components(StandardLoad, gss.base)))]
 end
 
+"""
+[This is a results getter function]
+
+**RETURNS A VECTOR!** use a vector of column titles if you want each inverter to be a separate column.
+
+Gets the currrent magnitude time series at each ZIPE load.
+"""
 function get_zipe_load_current_magnitudes(gss::GridSearchSys, sim::Union{Simulation, Missing}, _sm::Union{PSID.SmallSignalOutput, Missing}, _error::Union{String, Missing})
+    throw("unimplemented: not tested yet.")
     if (sim isa Missing) || (sim.results isa Nothing)
         return Array{Missing}(missing, length(get_components(StandardLoad, gss.base)))
     end
@@ -418,14 +518,29 @@ function get_zipe_load_current_magnitudes(gss::GridSearchSys, sim::Union{Simulat
     return ([current_magnitude(sim.results, "load_GFL_inverter"*string(get_number(get_bus(load)))).+ current_magnitude(sim.results, load.name) for load in get_components(StandardLoad, gss.base)])
 end
 
+"""
+[This is a results getter function]
+
+gets the value `sim.status` from the Simulation object (or missing).
+"""
 function get_sim_status(_gss::GridSearchSys, sim::Union{Simulation, Missing}, _sm::Union{PSID.SmallSignalOutput, Missing}, _error::Union{String, Missing})
     return (sim isa Missing) ? missing : sim.status
 end
 
+"""
+[This is a results getter function]
+
+gets the string representation of the error raised during simulation (or missing)
+"""
 function get_error(_gss::GridSearchSys, _sim::Union{Simulation, Missing}, _sm::Union{PSID.SmallSignalOutput, Missing}, error::Union{String, Missing})
     return error
 end
 
+"""
+[This is a results getter function]
+
+gets the whole Simulation object.
+"""
 function get_sim(_gss::GridSearchSys, sim::Union{Simulation, Missing}, _sm::Union{PSID.SmallSignalOutput, Missing}, _error::Union{String, Missing})
     return sim
 end
@@ -454,19 +569,40 @@ expand line and load param columns into each individual parameter. This improves
 Simply adds a column for each attribute of the line parameter struct and/or the load parameter struct.
 """
 function expand_columns!(gss::GridSearchSys)
+    columns_to_include = []
     if "Line Params" in names(gss.df)
+        push!(columns_to_include, :"Line Params")
         for i in fieldnames(LineModelParams)
             gss.df[!, i] = (x->x isa Missing ? missing : getfield(x, i)).(gss.df.var"Line Params")
         end
     end
 
     if "ZIPE Load Params" in names(gss.df)
+        push!(columns_to_include, :"ZIPE Load Params")
         for i in fieldnames(LoadParams)
             gss.df[!, i] = (x->x isa Missing ? missing : getfield(x, i)).(gss.df.var"ZIPE Load Params")
         end
     end
 
-    select!(gss.df, Not([:"Line Params", :"ZIPE Load Params"]))
+    select!(gss.df, Not(columns_to_include))
+end
+function expand_columns!(df::DataFrame)
+    columns_to_include = []
+    if "Line Params" in names(df)
+        push!(columns_to_include, :"Line Params")
+        for i in fieldnames(LineModelParams)
+            df[!, i] = (x->x isa Missing ? missing : getfield(x, i)).(df.var"Line Params")
+        end
+    end
+
+    if "ZIPE Load Params" in names(df)
+        push!(columns_to_include, :"ZIPE Load Params")
+        for i in fieldnames(LoadParams)
+            df[!, i] = (x->x isa Missing ? missing : getfield(x, i)).(df.var"ZIPE Load Params")
+        end
+    end
+
+    select!(df, Not(columns_to_include))
 end
 
 function unexpand_columns!(gss::GridSearchSys)
@@ -484,11 +620,12 @@ end
  - `dtmax`: maximum timestep for DE solver
  - `output_res`: timestep of returned time series results
  - `run_transient`: whether or not to actually perform the transient simulation
+ - `log_path`: path for simulation logs.
 
 ## Returns:
  - `(Simulation, SmallSignalOutput, UInt64, String)`: the Simulation object, the small signal analysis object, the time in nanoseconds the simulation took, and the error message. All but the time might be `missing` if things failed.
 """
-function runSim(system, change=BranchTrip(0.5, ACBranch, "Bus 5-Bus 4-i_1"), model=ResidualModel, tspan=(0., 5.), solver=IDA(linear_solver=:LapackBand, max_convergence_failures=5), dtmax=0.001, output_res=0.02, run_transient=true, log_path::String="data/sims")
+function runSim(system, change=BranchTrip(0.5, ACBranch, "Bus 5-Bus 4-i_1"), model=ResidualModel, tspan=(0., 5.), solver=IDA(linear_solver=:LapackDense, max_convergence_failures=5), dtmax=0.001, output_res=0.02, run_transient=true, log_path::String=mktempdir())
     tic = Base.time_ns()
     local sim, sm
 

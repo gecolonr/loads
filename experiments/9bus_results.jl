@@ -22,9 +22,9 @@ pygui(true)
 include("sysbuilder.jl")
 include("../data/build_scripts/device_models.jl")
 
-df = load_serde_data("data/results.jls")
+df = load_serde_data("data/sims")
+expand_columns!(df)
 
-df = gss.df
 # Eigenvalue Plot
 function eigplot()
     eigs = [
