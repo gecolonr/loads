@@ -19,10 +19,16 @@ using ForwardDiff
 
 pygui(true)
 
+
 include("sysbuilder.jl")
 include("../data/build_scripts/device_models.jl")
 
+# one or the other
+# you have to run the sims first to get these data files
+# since they can be big files we shouldn't push them to git
+df = load_serde_data("data/results.jls")
 df = load_serde_data("data/sims")
+
 expand_columns!(df)
 
 # Eigenvalue Plot
@@ -92,14 +98,14 @@ function transient()
                 println("dynpi failure: Z=$(row.z_percent), I=$(row.i_percent), P=$(row.p_percent), E=$(row.e_percent)")
                 continue
             end
-            axs[1, j].plot(0.48:0.0001:0.55, row[bus], label="Z=$(row.z_percent), I=$(row.i_percent), P=$(row.p_percent), E=$(row.e_percent)")
+            axs[1, j].plot(0.48:0.0001:0.55, row[bus], label="Z=$(round(row.z_percent, digits=3)), I=$(round(row.i_percent, digits=3)), P=$(round(row.p_percent, digits=3)), E=$(round(row.e_percent, digits=3))")
         end
         for row in eachrow(statpidata)
             if row[bus] isa Missing
                 println("statpi failure: Z=$(row.z_percent), I=$(row.i_percent), P=$(row.p_percent), E=$(row.e_percent)")
                 continue
             end
-            axs[2, j].plot(0.48:0.0001:0.55, row[bus], label="Z=$(row.z_percent), I=$(row.i_percent), P=$(row.p_percent), E=$(row.e_percent)")
+            axs[2, j].plot(0.48:0.0001:0.55, row[bus], label="Z=$(round(row.z_percent, digits=3)), I=$(round(row.i_percent, digits=3)), P=$(round(row.p_percent, digits=3)), E=$(round(row.e_percent, digits=3))")
         end
         axs[1, j].set_title(bus)
         axs[2, j].set_xlabel("Time (s)")

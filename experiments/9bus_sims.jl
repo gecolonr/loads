@@ -117,7 +117,14 @@ zipe_combos = [
     [1.0, 0.0, 0.0, 0.0],
     [0.5, 0.1, 0.2, 0.2],
     [0.2, 0.1, 0.5, 0.2],
-    [0.2, 0.1, 0.2, 0.5]
+    [0.2, 0.1, 0.2, 0.5],
+    [0.2, 0.1, 0.7, 0.0],
+
+    # [1/3, 1/3, 1/3, 0/4],
+    # [1/4, 1/4, 1/4, 1/4],
+    # [1/6, 1/6, 1/6, 2/4],
+    # [1/12,1/12,1/12,3/4],
+    # [0.0, 0.0, 0.0, 4/4]
 ]
 
 ##################################################################
@@ -125,8 +132,11 @@ zipe_combos = [
 ##################################################################
 
 # get all combinations of generators on this system
-gss = GridSearchSys(s, [gfl_inj(), gfm_inj(), sm_inj()])
-set_chunksize(gss, 20)
+gss = GridSearchSys(s, 
+    [gfl_inj() gfm_inj() sm_inj();
+     gfm_inj() gfm_inj() sm_inj();
+     gfl_inj() gfl_inj() sm_inj()])
+set_chunksize(gss, 1000)
 
 add_lines_sweep!(gss, [line_params], line_adders)
 add_zipe_sweep!(gss, missing, (x->LoadParams(x...)).(zipe_combos)) # no standard load adder. already in the system.
