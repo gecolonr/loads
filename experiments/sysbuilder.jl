@@ -383,10 +383,23 @@ Loads serialized dataframe from file or folder.
 If `path` is a folder, looks for all non-hidden .jls files, reads them, and concatenates them.
 """
 function load_serde_data(path::String)
-    if isdir(path)
-        return vcat([load_serde_data(path*"/"*file) for file in readdir(path) if (file[1]!='.')&&(file[end-3:end]==".jls")]...)
+    if !isdir(path)
+        return Serialization.deserialize(path)
     end
-    return Serialization.deserialize(path)
+
+    files = [path*"/"*file for file in readdir(path) if (file[1]!='.')&&(file[end-3:end]==".jls")]
+    dfs = Vector{DataFrame}(undef, length(files))
+    counter = Threads.Atomic{Int}(0)
+    progress_bar_width() = displaysize(stdout)[2]-28-Int(2*(floor(log10(length(files)))+1))-length(path)
+    print("Reading files from $path: |"*(" "^progress_bar_width())*"| (0/$(length(files)))")
+    Threads.@threads for i in 1:length(files)
+        dfs[i] = load_serde_data(files[i])
+        files_read = Threads.atomic_add!(counter, 1) + 1
+        boxes = Int(round((files_read/length(files))*progress_bar_width()))
+        print("\r"*(" "^(displaysize(stdout)[2])))
+        print("\rReading files from $path: |"*("@"^boxes)*(" "^(progress_bar_width()-boxes))*"| ($files_read/$(length(files)))")
+    end
+    return vcat(dfs...)
 end
 
 """

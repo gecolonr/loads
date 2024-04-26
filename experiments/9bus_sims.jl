@@ -132,14 +132,11 @@ zipe_combos = [
 ##################################################################
 
 # get all combinations of generators on this system
-gss = GridSearchSys(s, 
-    [gfl_inj() gfm_inj() sm_inj();
-     gfm_inj() gfm_inj() sm_inj();
-     gfl_inj() gfl_inj() sm_inj()])
-set_chunksize(gss, 1000)
+gss = GridSearchSys(s, [gfl_inj(), gfm_inj(), sm_inj()])
+set_chunksize(gss, 500)
 
 add_lines_sweep!(gss, [line_params], line_adders)
-add_zipe_sweep!(gss, missing, (x->LoadParams(x...)).(zipe_combos)) # no standard load adder. already in the system.
+add_zipe_sweep!(gss, missing, (x->LoadParams(x...)).(gridsearch())) # no standard load adder. already in the system.
 
 add_result!(gss, "Eigenvalues", get_eigenvalues)
 add_result!(gss, "Eigenvectors", get_eigenvectors)
@@ -148,7 +145,7 @@ add_result!(gss, "Simulation Status", get_sim_status)
 add_result!(gss, "Error", get_error)
 add_result!(gss, "sim", get_sim)
 
-executeSims!(gss, BranchTrip(0.5, ACBranch, line_params.alg_line_name), (0.48, 0.55), 0.001, 0.0001, true)
+executeSims!(gss, BranchTrip(0.5, ACBranch, line_params.alg_line_name), (0.48, 0.55), 0.005, 0.0001, true)
 # expand_columns!(gss)
 # save_serde_data(gss, "data/results.jls")
 
