@@ -21,7 +21,7 @@ include("../data/build_scripts/device_models.jl")
 
 
 ##################################################################
-################## MAKE 2-MACHINE BASE SYSTEM ####################
+####################### MAKE BASE SYSTEM #########################
 ##################################################################
 
 # system from 9 bus base system
@@ -33,7 +33,7 @@ s = System(joinpath(pwd(), "data/raw_data/WSCC_9bus.raw"))
 
 # functions to create our machines: one inverter and one generator
 gfm_inj() = DynamicInverter(
-    "GFM",
+    "GFM", # Grid forming control
     1.0, # ω_ref,
     converter_high_power(), #converter
     VSM_outer_control(), #outer control
@@ -43,7 +43,7 @@ gfm_inj() = DynamicInverter(
     filt(), #filter
 )
 gfl_inj() = DynamicInverter(
-    "GFL",
+    "GFL", # Grid following inverter
     1.0, # ω_ref,
     converter_high_power(), #converter
     VSM_outer_control(), #outer control
@@ -53,7 +53,7 @@ gfl_inj() = DynamicInverter(
     filt(), #filter
 )
 sm_inj() = DynamicGenerator(
-    "SM", # stands for "Generator"
+    "SM", # Synchronous Machine
     1.0, # ω_ref,
     AF_machine(), #machine
     shaft_no_damping(), #shaft
@@ -107,9 +107,17 @@ line_adders = Dict{String, Function}([
 
 """
 returns generator of all Z, I, P, and E combinations in steps of `dx`.
+
+NOTE: previously this code did i∈[0, 1], j∈[0, 1-i], k∈[0, 1-i-j], 
+which makes the if statement at the end implicit, makes the code cleaner, 
+and makes it align more with the typical mathematical definition. However,
+it turns out that sometimes float math would give you 1:dx:(5*dx-ε), which
+would return one less element than expected. This is BAD since we'd lose 
+quite a few elements.
+The current code works much better. The `dx/10` is just very safe tolerance.
 """
-function gridsearch(dx=0.1, Zmax=1.0, Imax=1.0, Pmax=1.0)
-    return ([i j k 1.0-i-j-k] for i in 0.0:dx:Zmax for j in 0.0:dx:min(1.0-i, Imax) for k in 0.0:dx:min(1.0-i-j, Pmax))
+function gridsearch(dx=0.1)
+    return ([i j k 1.0-i-j-k] for i in 0:dx:1 for j in 0:dx:1 for k in 0:dx:1 if ((i+j+k-1.0) < (dx/10)) )
 end
 
 zipe_combos = [
@@ -145,7 +153,7 @@ add_result!(gss, "Simulation Status", get_sim_status)
 add_result!(gss, "Error", get_error)
 add_result!(gss, "sim", get_sim)
 
-executeSims!(gss, BranchTrip(0.5, ACBranch, line_params.alg_line_name), (0.48, 0.55), 0.005, 0.0001, true)
+executeSims!(gss, BranchTrip(0.5, ACBranch, line_params.alg_line_name), (0.48, 0.55), 0.005, 0.0001, true, "data/results")
 # expand_columns!(gss)
 # save_serde_data(gss, "data/results.jls")
 

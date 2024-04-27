@@ -147,11 +147,17 @@ function sillies(df)
         (x->(x isa Missing)).(:"Load Voltage at Bus 5")
     end
     data = [bad, missingdata, normal]
+    data = [((x->x.z_percent).(data)),
+            ((x->x.i_percent).(data)),
+            ((x->x.p_percent).(data)),
+            ((x->x.e_percent).(data))]
     fig, axs = plt.subplots(4, 1, sharex=true)
-    axs[1, 1].hist(((x->x.z_percent).(data)), histtype="bar", stacked=true, label=["anomalous", "convergence failure", "normal"])
-    axs[2, 1].hist(((x->x.i_percent).(data)), histtype="bar", stacked=true, label=["anomalous", "convergence failure", "normal"])
-    axs[3, 1].hist(((x->x.p_percent).(data)), histtype="bar", stacked=true, label=["anomalous", "convergence failure", "normal"])
-    axs[4, 1].hist(((x->x.e_percent).(data)), histtype="bar", stacked=true, label=["anomalous", "convergence failure", "normal"])
+    weights = x->((n->(2/(10*(1.1-n)*(10*(1.1-n)+1)))).(x))
+    axs[1, 1].hist(data[1], histtype="bar", stacked=true, weights=weights.(data[1]), label=["anomalous", "convergence failure", "normal"])
+    axs[2, 1].hist(data[2], histtype="bar", stacked=true, weights=weights.(data[2]), label=["anomalous", "convergence failure", "normal"])
+    axs[3, 1].hist(data[3], histtype="bar", stacked=true, weights=weights.(data[3]), label=["anomalous", "convergence failure", "normal"])
+    axs[4, 1].hist(data[4], histtype="bar", stacked=true, weights=weights.(data[4]), label=["anomalous", "convergence failure", "normal"])
+    axs[1, 1].hist
     fig.legend()
     plt.show()
 end
