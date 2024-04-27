@@ -13,7 +13,9 @@ using DataFramesMeta
 using LaTeXStrings
 using PyPlot
 const plt = PyPlot
-
+# using PyCall
+# mplc = pyimport("mplcursors")
+# pygui(:qt5)
 pygui(true)
 
 

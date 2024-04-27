@@ -259,7 +259,7 @@ function add_zipe_sweep!(gss::GridSearchSys, standardLoadFunction::Union{Functio
     if !(standardLoadFunction isa Missing)
         for s in values(sysdict)
             # oh boy this is terrible code
-            # something something monad side effect functional programming bind operator haskell lambda calculus
+            # something something currying monad side effect functional programming bind operator haskell lambda calculus
             
             # it's basically equivalent to this:
             #
