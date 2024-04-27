@@ -161,4 +161,34 @@ function sillies(df)
     fig.legend()
     plt.show()
 end
+
+function endvoltage(df)
+    statpi = @subset df begin
+        :"Line Model" .== "statpi"
+        ((x)->!(x isa Missing)).(:"Load Voltage at Bus 5")
+    end
+    dynpi = @subset df begin
+        :"Line Model" .== "dynpi"
+        ((x)->!(x isa Missing)).(:"Load Voltage at Bus 5")
+    end
+    fig, axs = plt.subplots(3, sharex=false, sharey=true)
+    axs[1].hist([(x->(x[end]-x[1])).(statpi.var"Load Voltage at Bus 5"),
+                 (x->(x[end]-x[1])).(dynpi.var"Load Voltage at Bus 5")], label=[raw"Static $\pi$ model", raw"Dynamic $\pi$ model"], bins=100)
+    axs[2].hist([(x->(x[end]-x[2])).(statpi.var"Load Voltage at Bus 6"),
+                 (x->(x[end]-x[2])).(dynpi.var"Load Voltage at Bus 6")], label=[raw"Static $\pi$ model", raw"Dynamic $\pi$ model"], bins=100)
+    axs[3].hist([(x->(x[end]-x[3])).(statpi.var"Load Voltage at Bus 8"),
+                 (x->(x[end]-x[4])).(dynpi.var"Load Voltage at Bus 8")], label=[raw"Static $\pi$ model", raw"Dynamic $\pi$ model"], bins=100)
+    for ax in axs
+        ax.set_yscale("log")
+        ax.legend(prop=Dict("size"=>6))
+    end
+    axs[3].set_xlabel(raw"$V(t_f)-V(t_0)$ (pu)")
+    axs[1].set_ylabel("Bus 5\n\n")
+    axs[2].set_ylabel("Bus 6\n\n")
+    axs[3].set_ylabel("Bus 8\n\n")
+    fig.suptitle("Net Voltage Change During Transient Simulation (0.07s)")
+    plt.show()
+
+
+end
 # transient()

@@ -231,6 +231,9 @@ function GridSearchSys(sys::System, injectors::Union{AbstractArray{DynamicInject
     sysdict = makeSystems(sys, injectors, busgroups)
     newsysdict = Dict()
     for (key, val) in sysdict
+        # instead of storing the `sys` object, we store a function which, when called, copies the system.
+        # The external function allows us to save the pointer to the system (val) so that when we call this function
+        # later, we'll get the value of val right now, not then.
         newsysdict[key] = ((value)->(()->deepcopy(value)))(val)
     end
     # first fix busgroups
@@ -255,6 +258,24 @@ function add_zipe_sweep!(gss::GridSearchSys, standardLoadFunction::Union{Functio
     sysdict = deepcopy(gss.sysdict)
     if !(standardLoadFunction isa Missing)
         for s in values(sysdict)
+            # oh boy this is terrible code
+            # something something monad side effect functional programming bind operator haskell lambda calculus
+            
+            # it's basically equivalent to this:
+            #
+            # s: &dyn Fn() -> System = make_loadadder_function(s: &dyn Fn() -> System)
+
+            # where make_loadadder_function is defined like this:
+
+            # function make_loadadder_function(system: &dyn Fn()->System) -> &dyn Fn(System)-> System
+            #     function addload_noargs()
+            #         sys = system() # instantiate system
+            #         add_component!(sys, load_creator(sys))
+            #         return sys
+            #     end
+            #     return addload_noargs
+            # end
+
             s = (s->(()->(sys=s();add_component!(sys, standardLoadFunction(sys));sys)))(s)
         end
     end

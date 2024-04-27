@@ -153,7 +153,7 @@ add_result!(gss, "Simulation Status", get_sim_status)
 add_result!(gss, "Error", get_error)
 add_result!(gss, "sim", get_sim)
 
-executeSims!(gss, BranchTrip(0.5, ACBranch, line_params.alg_line_name), (0.48, 0.55), 0.005, 0.0001, true, "data/results")
+executeSims!(gss, BranchTrip(0.5, ACBranch, line_params.alg_line_name), (0.48, 0.55), 0.005, 0.00005, true, "data/results")
 # expand_columns!(gss)
 # save_serde_data(gss, "data/results.jls")
 
