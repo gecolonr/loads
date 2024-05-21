@@ -31,25 +31,63 @@ include("sysbuilder.jl")
 
 # Eigenvalue Plot
 function eigplot(df)
-    eigs = [
-        @subset(df, :z_percent.==1.0).Eigenvalues,
-        @subset(df, :z_percent.==0.5).Eigenvalues,
-        @subset(df, :z_percent.==0.2, :p_percent.==0.5).Eigenvalues,
-        @subset(df, :z_percent.==0.2, :p_percent.==0.5).Eigenvalues
-    ]
+    df2 = @subset df begin
+        :"injector at {Bus 3}" .== "GFM"
+        :"injector at {Bus1}" .== "SM"
+        :"injector at {Bus 2}" .== "GFL"
+    end
 
-    for i in 1:length(eigs)
-        plt.scatter(
-            real.(reduce(vcat, eigs[i])), 
-            imag.(reduce(vcat, eigs[i])),
-            label=string(zipe_combos[i]),
+    # select loads:
+    #  1. 0. 0. 0
+    #  0. 0. 1. 0
+    #  0. 0. 0. 1
+    #  .3 .3 .3 .1
+    #  .2 .2 .2 .4
+    #  .1 .1 .1 .7
+    combos = [
+        [1.0, 0.0, 0.0, 0.0],
+        [0.0, 0.0, 1.0, 0.0],
+        [0.3, 0.3, 0.3, 0.1],
+        [0.2, 0.2, 0.2, 0.4],
+        [0.1, 0.1, 0.1, 0.7],
+        [0.0, 0.0, 0.0, 1.0],
+    ]
+    geteigs(df) = [
+        @subset(df, :z_percent.≈1.0                                    ).Eigenvalues,
+        @subset(df,                                   :p_percent.≈1.0).Eigenvalues,
+        @subset(df, :z_percent.≈0.3, :i_percent.≈0.3, :p_percent.≈0.3).Eigenvalues,
+        @subset(df, :z_percent.≈0.2, :i_percent.≈0.2, :p_percent.≈0.2).Eigenvalues,
+        @subset(df, :z_percent.≈0.1, :i_percent.≈0.1, :p_percent.≈0.1).Eigenvalues,
+        @subset(df, :z_percent.≈0.0, :i_percent.≈0.0, :p_percent.≈0.0).Eigenvalues,
+    ]
+    stateigs = geteigs(@subset(df2, :"Line Model" .== "statpi"))
+    dyneigs = geteigs(@subset(df2, :"Line Model" .== "dynpi"))
+    fig, axs = plt.subplots(2, 1, sharex=true)
+    axs[1].set_title("Static Pi Model")
+    axs[2].set_title("Dynamic Pi Model")
+    for i in 1:length(combos)
+        axs[1].scatter(
+            real.(reduce(vcat, stateigs[i])), 
+            imag.(reduce(vcat, stateigs[i])),
+            label=string(combos[i]),
             s=5,
-            alpha=0.25
+            # alpha=0.25
+        )
+        axs[2].scatter(
+            real.(reduce(vcat, dyneigs[i])), 
+            imag.(reduce(vcat, dyneigs[i])),
+            label=string(combos[i]),
+            s=5,
+            # alpha=0.25
         )
     end
-    plt.xlabel(L"\mathrm{Re}(\lambda)")
-    plt.ylabel(L"\mathrm{Im}(\lambda)")
-    plt.legend()
+    axs[2].set_xlabel(L"\mathrm{Re}(\lambda)")
+    axs[1].set_ylabel(L"\mathrm{Im}(\lambda)")
+    axs[2].set_ylabel(L"\mathrm{Im}(\lambda)")
+    axs[1].legend(prop=Dict("size"=>5))
+    axs[2].legend(prop=Dict("size"=>5))
+    axs[1].axvline(x=0, color="black", ls="--", lw=1)
+    axs[2].axvline(x=0, color="black", ls="--", lw=1)
     plt.show()
 end
 
@@ -69,23 +107,31 @@ function maxeigbox(df)
 end
 
 function transient(df)
-    dynpidata = @subset df begin
-        # :"Load Voltage at Bus 5"
-        :"Line Model" .== "dynpi"
+    df2 = @subset df begin
         :"injector at {Bus 3}" .== "GFM"
-        :"injector at {Bus1}" .== "GFM"
-        :"injector at {Bus 2}" .== "SM"
-        (:"e_percent" .+ :"p_percent") .== 0.7
+        :"injector at {Bus1}" .== "SM"
+        :"injector at {Bus 2}" .== "GFL"
+    end
+    combos = [
+        [1.0, 0.0, 0.0, 0.0],
+        [0.0, 0.0, 1.0, 0.0],
+        [0.3, 0.3, 0.3, 0.1],
+        [0.2, 0.2, 0.2, 0.4],
+        [0.1, 0.1, 0.1, 0.7],
+        [0.0, 0.0, 0.0, 1.0],
+    ]
+    selectZIPE(df) = vcat([
+        @subset(df, :z_percent.≈1.0                                  ),
+        @subset(df,                                   :p_percent.≈1.0),
+        @subset(df, :z_percent.≈0.3, :i_percent.≈0.3, :p_percent.≈0.3),
+        @subset(df, :z_percent.≈0.2, :i_percent.≈0.2, :p_percent.≈0.2),
+        @subset(df, :z_percent.≈0.1, :i_percent.≈0.1, :p_percent.≈0.1),
+        @subset(df, :z_percent.≈0.0, :i_percent.≈0.0, :p_percent.≈0.0),
+    ]...)
+    statpidata = (@subset(df2, :"Line Model" .== "statpi"))
+    dynpidata = (@subset(df2, :"Line Model" .== "dynpi"))
 
-    end
-    statpidata = @subset df begin
-        # :"Load Voltage at Bus 5"
-        :"Line Model" .== "statpi"
-        :"injector at {Bus 3}" .== "GFM"
-        :"injector at {Bus1}" .== "GFM"
-        :"injector at {Bus 2}" .== "SM"
-        (:"e_percent" .+ :"p_percent") .== 0.7
-    end
+    # return statpidata
 
     # busses = ["Load Voltage at $i" for i in get_name.(get_components(Bus, df.sim[1].sys))]
     busses = ["Load Voltage at $i" for i in get_name.(get_bus.(get_components(StandardLoad, first(df.sim).sys)))]
@@ -93,7 +139,7 @@ function transient(df)
     fig.suptitle("Load Voltages for BranchTrip on line Bus 5-Bus 4-i₁")
     axs[1].set_ylabel("dynpi")
     axs[2].set_ylabel("statpi")
-    colors = ["tab:blue", "tab:orange", "tab:green", "tab:red", "tab:purple", "tab:brown", "tab:pink", "tab:gray", "tab:olive", "tab:cyan"]
+    colors = ["tab:blue", "tab:orange", "tab:green", "tab:red", "tab:purple", "tab:brown", "tab:pink", "tab:gray", "tab:olive", "tab:cyan", "b", "g", "r", "c", "m", "y", "k", "w"]
     colordict = Dict()
     # axs = [Plot() Plot() Plot(); Plot() Plot() Plot()]
     for (j, bus) in enumerate(busses)
@@ -108,7 +154,7 @@ function transient(df)
                 colordict[params] = colors[length(colordict)+1]
             end
             # addtraces!(axs[1, j], PlotlyJS.scatter(; x=0.48:0.0001:0.55, y=row[bus]))
-            axs[1, j].plot(0.48:0.0001:0.55, row[bus], color=colordict[params], label="Z=$(round(row.z_percent, digits=3)), I=$(round(row.i_percent, digits=3)), P=$(round(row.p_percent, digits=3)), E=$(round(row.e_percent, digits=3))")
+            axs[1, j].plot(0.48:0.00005:0.55, row[bus], color=colordict[params], label="Z=$(round(row.z_percent, digits=3)), I=$(round(row.i_percent, digits=3)), P=$(round(row.p_percent, digits=3)), E=$(round(row.e_percent, digits=3))")
         end
         for row in eachrow(statpidata)
             if row[bus] isa Missing
@@ -121,18 +167,19 @@ function transient(df)
                 colordict[params] = colors[length(colordict)+1]
             end
             # addtraces!(axs[2, j], PlotlyJS.scatter(; x=0.48:0.0001:0.55, y=row[bus]))
-            axs[2, j].plot(0.48:0.0001:0.55, row[bus], color=colordict[params], label="Z=$(round(row.z_percent, digits=3)), I=$(round(row.i_percent, digits=3)), P=$(round(row.p_percent, digits=3)), E=$(round(row.e_percent, digits=3))")
+            axs[2, j].plot(0.48:0.00005:0.55, row[bus], color=colordict[params], label="Z=$(round(row.z_percent, digits=3)), I=$(round(row.i_percent, digits=3)), P=$(round(row.p_percent, digits=3)), E=$(round(row.e_percent, digits=3))")
         end
         axs[1, j].set_title(bus)
         axs[2, j].set_xlabel("Time (s)")
         
-        axs[1, j].legend(prop=Dict("size"=>5))
-        axs[2, j].legend(prop=Dict("size"=>5))
+        axs[1, j].legend()#prop=Dict("size"=>5))
+        axs[2, j].legend()#prop=Dict("size"=>5))
     end
     plt.xlabel("Time (s)")
     # axs[1].set_ylabel("Voltage")
     # axs[2].set_ylabel("Voltage")
     plt.show()
+    plt.tight_layout()
 end
 
 function sillies(df)
@@ -148,19 +195,20 @@ function sillies(df)
         :"Line Model" .== "statpi"
         (x->(x isa Missing)).(:"Load Voltage at Bus 5")
     end
-    data = [bad, missingdata, normal]
+    data = [bad, normal, missingdata]
     data = [((x->x.z_percent).(data)),
             ((x->x.i_percent).(data)),
             ((x->x.p_percent).(data)),
             ((x->x.e_percent).(data))]
     fig, axs = plt.subplots(4, 1, sharex=true)
     weights = x->((n->(2/(10*(1.1-n)*(10*(1.1-n)+1)))).(x))
-    axs[1, 1].hist(data[1], histtype="bar", stacked=true, weights=weights.(data[1]), label=["anomalous", "convergence failure", "normal"])
-    axs[2, 1].hist(data[2], histtype="bar", stacked=true, weights=weights.(data[2]), label=["anomalous", "convergence failure", "normal"])
-    axs[3, 1].hist(data[3], histtype="bar", stacked=true, weights=weights.(data[3]), label=["anomalous", "convergence failure", "normal"])
-    axs[4, 1].hist(data[4], histtype="bar", stacked=true, weights=weights.(data[4]), label=["anomalous", "convergence failure", "normal"])
+    axs[1, 1].hist(data[1], histtype="bar", stacked=true, bins=0:0.1:1.1 .- 0.01, weights=weights.(data[1]), label=["anomalous", "normal", "convergence failure"])
+    axs[2, 1].hist(data[2], histtype="bar", stacked=true, bins=0:0.1:1.1 .- 0.01, weights=weights.(data[2]), label=["anomalous", "normal", "convergence failure"])
+    axs[3, 1].hist(data[3], histtype="bar", stacked=true, bins=0:0.1:1.1 .- 0.01, weights=weights.(data[3]), label=["anomalous", "normal", "convergence failure"])
+    axs[4, 1].hist(data[4], histtype="bar", stacked=true, bins=0:0.1:1.1 .- 0.01, weights=weights.(data[4]), label=["anomalous", "normal", "convergence failure"])
     axs[1, 1].hist
     fig.legend()
+    map(x->x.set_yscale("log"), axs)
     plt.show()
 end
 

@@ -76,6 +76,7 @@ case_gen() = DynamicGenerator(
 )
 
 
+
 # get all combinations of generators on this system
 sysdict = makeSystems(s, [case_inv(), case_gen()]);
 
@@ -122,16 +123,20 @@ function zipe_gridsearch(systems, params)
             
             # try/catch block to catch simulation convergence errors
             try
+                println("here?")
                 # runSim is from sysbuilder.jl
                 (sim, sm, time) = runSim(
                     sys, # system to simulate
-                    BranchTrip(0.5, ACBranch, first(get_components(ACBranch, sys)).name), # perturbation
+                    BranchTrip(0.5, ACBranch, "BUS 1-BUS 2-i_1"), # perturbation, "otherline" or "BUS 1-BUS 2-i_1"
                     ResidualModel, # model to use (we're using IDA so this is the right one)
-                    (0.0, 5.0), # time span
+                    (0.48, 0.55), # time span
                     IDA(), # DE solver
-                    0.02, # max dt
+                    0.002, # max dt
+                    0.0001,
                     true, # true=run transient simulation, false=don't
+                    "data/funnytest"
                 )
+                println(sm.eigenvalues)
                 if string(sim.status)=="SIMULATION_FINALIZED"
                     series = get_voltage_magnitude_series(read_results(sim), 102)
                     startidx = findmin(abs.(series[1].-0.5))[2]
@@ -172,7 +177,7 @@ function zipe_gridsearch(systems, params)
 end
 
 # run gridsearch
-df = zipe_gridsearch(sysdict, gridsearch())
+df = zipe_gridsearch(sysdict, [[1.0, 0.0, 0.0, 0.0], [0.0, 1.0, 0.0, 0.0]])
 
 # create trace for plotlyjs
 mytrace = parcoords(

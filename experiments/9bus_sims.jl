@@ -46,7 +46,7 @@ gfl_inj() = DynamicInverter(
     "GFL", # Grid following inverter
     1.0, # ω_ref,
     converter_high_power(), #converter
-    VSM_outer_control(), #outer control
+    GFL_outer_control(), #outer control
     GFL_inner_control(), # this one's GFL
     dc_source_lv(), #dc source
     pll(), #pll
@@ -122,18 +122,37 @@ end
 
 zipe_combos = [
 #     Z    I    P    E
+    # [1.0, 0.0, 0.0, 0.0],
+    # [0.5, 0.1, 0.2, 0.2],
+    # [0.2, 0.1, 0.5, 0.2],
+    # [0.2, 0.1, 0.2, 0.5],
+    # [0.2, 0.1, 0.7, 0.0],
     [1.0, 0.0, 0.0, 0.0],
-    [0.5, 0.1, 0.2, 0.2],
-    [0.2, 0.1, 0.5, 0.2],
-    [0.2, 0.1, 0.2, 0.5],
-    [0.2, 0.1, 0.7, 0.0],
-
-    # [1/3, 1/3, 1/3, 0/4],
-    # [1/4, 1/4, 1/4, 1/4],
-    # [1/6, 1/6, 1/6, 2/4],
-    # [1/12,1/12,1/12,3/4],
-    # [0.0, 0.0, 0.0, 4/4]
+    [0.0, 0.0, 1.0, 0.0],
+    [0.3, 0.3, 0.3, 0.1],
+    [0.2, 0.2, 0.2, 0.4],
+    [0.1, 0.1, 0.1, 0.7],
+    [0.0, 0.0, 0.0, 1.0],
 ]
+
+##################################################################
+############$######### POWER SETPOINT ############################
+##################################################################
+
+function set_power_setpt(sys, scale)
+    for load in get_components(StandardLoad, sys)
+        load.active_power *= scale
+        load.reactive_power *= scale
+    end
+    for gen in get_components(Generator, sys)
+        if gen.bus.bustype == ACBusTypes.PV
+            # set_base_power!(g, g.base_power * p.load_scale)
+            set_active_power!(gen, gen.active_power * scale)
+            set_reactive_power!(gen, gen.reactive_power * scale)
+        end
+    end
+    return sys
+end
 
 ##################################################################
 ################### RUNNING ALL OF IT ############################
@@ -145,6 +164,7 @@ set_chunksize(gss, 500)
 
 add_lines_sweep!(gss, [line_params], line_adders)
 add_zipe_sweep!(gss, missing, (x->LoadParams(x...)).(gridsearch())) # no standard load adder. already in the system.
+# add_generic_sweep!(gss, "Power Setpoint", set_power_setpt, [0.5, 1.0, 1.5])
 
 add_result!(gss, "Eigenvalues", get_eigenvalues)
 add_result!(gss, "Eigenvectors", get_eigenvectors)

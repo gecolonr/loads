@@ -5,6 +5,7 @@ Pkg.activate(".")
 # Pkg.instantiate()
 using PowerSystems
 using PowerSimulationsDynamics
+using PowerFlows
 using ZIPE_loads
 using TLmodels
 using Combinatorics
@@ -249,6 +250,24 @@ function GridSearchSys(sys::System, injectors::Union{AbstractArray{DynamicInject
     return GridSearchSys(sys, header, newsysdict, Vector(), Vector(), DataFrame(), chunksize)
 end
 
+
+"""
+add arbitrary sweeps to a GridSearch.
+ - `params`: Vector<T>
+ - `adder`: Fn(System, T)->System. Modifying the system in-place is OK.
+ - `title` is the name of the variable this sweep changes.
+"""
+function add_generic_sweep!(gss::GridSearchSys, title::String, adder::Function, params::Vector{T}) where T
+    newsysdict = Dict()
+    for (key, s) in gss.sysdict
+        for p in params
+            newsysdict[[key..., p]] = ((s, p)->(()->adder(s(), p)))(s, p)
+        end
+    end
+    add_column!(gss, title)
+    gss.sysdict = newsysdict
+end
+
 """
 Adds a ZIPE load sweep to a GridSearchSys. Pass in a standard load to base the ZIPE load off of, and a vector of LoadParams structs to test.
 
@@ -258,8 +277,9 @@ function add_zipe_sweep!(gss::GridSearchSys, standardLoadFunction::Union{Functio
     sysdict = deepcopy(gss.sysdict)
     if !(standardLoadFunction isa Missing)
         for s in values(sysdict)
-            # oh boy this is terrible code
-            # something something currying monad side effect functional programming bind operator haskell lambda calculus
+            # this is called "currying" or something, idk im not a haskell programmer
+            # im hungry, curry sounds good rn
+            # https://xkcd.com/2210/
             
             # it's basically equivalent to this:
             #
@@ -275,6 +295,8 @@ function add_zipe_sweep!(gss::GridSearchSys, standardLoadFunction::Union{Functio
             #     end
             #     return addload_noargs
             # end
+
+            # we're using higher order functions to insert saved information
 
             s = (s->(()->(sys=s();add_component!(sys, standardLoadFunction(sys));sys)))(s)
         end
@@ -662,18 +684,21 @@ end
 function runSim(system, change=BranchTrip(0.5, ACBranch, "Bus 5-Bus 4-i_1"), model=ResidualModel, tspan=(0., 5.), solver=IDA(linear_solver=:LapackDense, max_convergence_failures=5), dtmax=0.001, output_res=0.02, run_transient=true, log_path::String=mktempdir())
     tic = Base.time_ns()
     local sim, sm
-
+    solve_ac_powerflow!(system)
+    println("HERE1")
     sim = Simulation(
         model,
         system,
         log_path,
         tspan,
         change,
-        disable_timer_outputs=true
-        
+        disable_timer_outputs=true, # needed for multiprocessing
+        # initialize_simulation=false,
     )
+    println("HERE2")
     try
         sm = small_signal_analysis(sim)
+        println(sm)
     catch err
         return (sim, missing, Base.time_ns()-tic, "Small Signal Analysis failed with error $err")
     end
@@ -685,7 +710,7 @@ function runSim(system, change=BranchTrip(0.5, ACBranch, "Bus 5-Bus 4-i_1"), mod
                 dtmax = dtmax,
                 saveat = output_res,
                 tstops = [0.5],
-                # enable_progress_bar = false, # with multithreading it's meaningless anyways
+                enable_progress_bar = false, # with multithreading it's meaningless anyways
             )
         catch err
             return (sim, sm, Base.time_ns()-tic, "Transient sim failed with error $err")
