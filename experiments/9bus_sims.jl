@@ -134,9 +134,19 @@ zipe_combos = [
     [0.1, 0.1, 0.1, 0.7],
     [0.0, 0.0, 0.0, 1.0],
 ]
+η_combos = Dict(
+    "Constant Impedance" => [1.0, 0.0, 0.0, 0.0],
+    "Constant Power"     => [0.0, 0.0, 1.0, 0.0],
+    "Full E Load"        => [0.0, 0.0, 0.0, 1.0],
+    "High E Load"        => [0.1, 0.1, 0.1, 0.7],
+    "Medium E Load"      => [0.2, 0.2, 0.2, 0.4],
+    "Low E Load"         => [0.3, 0.3, 0.3, 0.1],
+    "Low P High E Load"  => [0.15, 0.15, 0.15, 0.55],
+    "Low P Low E Load"   => [0.15, 0.15, 0.55, 0.15],
+)
 
 ##################################################################
-############$######### POWER SETPOINT ############################
+###################### POWER SETPOINT ############################
 ##################################################################
 
 function set_power_setpt(sys, scale)
@@ -159,11 +169,16 @@ end
 ##################################################################
 
 # get all combinations of generators on this system
-gss = GridSearchSys(s, [gfl_inj(), gfm_inj(), sm_inj()])
+# gss = GridSearchSys(s, [gfl_inj(), gfm_inj(), sm_inj()])
+
+gss = GridSearchSys(s, [sm_inj() gfl_inj() gfm_inj(); 
+                        sm_inj() gfm_inj() gfl_inj(); 
+                        gfm_inj() gfl_inj() sm_inj()],
+                        ["Bus1", "Bus 2", "Bus 3"]) # just make sure the busses are in the right order
 set_chunksize(gss, 500)
 
 add_lines_sweep!(gss, [line_params], line_adders)
-add_zipe_sweep!(gss, missing, (x->LoadParams(x...)).(gridsearch())) # no standard load adder. already in the system.
+add_zipe_sweep!(gss, missing, (x->LoadParams(x...)).(collect(values(η_combos)))) # no standard load adder. already in the system.
 # add_generic_sweep!(gss, "Power Setpoint", set_power_setpt, [0.5, 1.0, 1.5])
 
 add_result!(gss, "Eigenvalues", get_eigenvalues)
@@ -173,7 +188,7 @@ add_result!(gss, "Simulation Status", get_sim_status)
 add_result!(gss, "Error", get_error)
 add_result!(gss, "sim", get_sim)
 
-executeSims!(gss, BranchTrip(0.5, ACBranch, line_params.alg_line_name), (0.48, 0.55), 0.005, 0.00005, true, "data/results")
+executeSims!(gss, BranchTrip(0.5, ACBranch, line_params.alg_line_name), (0.48, 1.0), 0.005, 0.00005, true, "data/fineresults_smallertime")
 # expand_columns!(gss)
 # save_serde_data(gss, "data/results.jls")
 
