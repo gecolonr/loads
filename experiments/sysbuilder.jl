@@ -442,6 +442,7 @@ function load_serde_data(path::String)
         print("\r"*(" "^(displaysize(stdout)[2])))
         print("\rReading files from $path: |"*("@"^boxes)*(" "^(progress_bar_width()-boxes))*"| ($files_read/$(length(files)))")
     end
+    println("\nDone!")
     return vcat(dfs...)
 end
 
@@ -624,25 +625,10 @@ expand line and load param columns into each individual parameter. This improves
 
 Simply adds a column for each attribute of the line parameter struct and/or the load parameter struct.
 """
-function expand_columns!(gss::GridSearchSys)
-    columns_to_include = []
-    if "Line Params" in names(gss.df)
-        push!(columns_to_include, :"Line Params")
-        for i in fieldnames(LineModelParams)
-            gss.df[!, i] = (x->x isa Missing ? missing : getfield(x, i)).(gss.df.var"Line Params")
-        end
-    end
-
-    if "ZIPE Load Params" in names(gss.df)
-        push!(columns_to_include, :"ZIPE Load Params")
-        for i in fieldnames(LoadParams)
-            gss.df[!, i] = (x->x isa Missing ? missing : getfield(x, i)).(gss.df.var"ZIPE Load Params")
-        end
-    end
-
-    select!(gss.df, Not(columns_to_include))
+function expand_columns!(gss::GridSearchSys, remove_expanded=false)
+    expand_columns!(gss.df, remove_expanded)
 end
-function expand_columns!(df::DataFrame)
+function expand_columns!(df::DataFrame, remove_expanded=false)
     columns_to_include = []
     if "Line Params" in names(df)
         push!(columns_to_include, :"Line Params")
@@ -657,8 +643,9 @@ function expand_columns!(df::DataFrame)
             df[!, i] = (x->x isa Missing ? missing : getfield(x, i)).(df.var"ZIPE Load Params")
         end
     end
-
-    select!(df, Not(columns_to_include))
+    if remove_expanded
+        select!(df, Not(columns_to_include))
+    end
 end
 
 function unexpand_columns!(gss::GridSearchSys)

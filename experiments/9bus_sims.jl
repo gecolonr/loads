@@ -120,6 +120,7 @@ function gridsearch(dx=0.1)
     return ([i j k 1.0-i-j-k] for i in 0:dx:1 for j in 0:dx:1 for k in 0:dx:1 if ((i+j+k-1.0) < (dx/10)) )
 end
 
+
 zipe_combos = [
 #     Z    I    P    E
     # [1.0, 0.0, 0.0, 0.0],
@@ -149,16 +150,21 @@ zipe_combos = [
 ###################### POWER SETPOINT ############################
 ##################################################################
 
-function set_power_setpt(sys, scale)
+function set_power_setpt!(sys, scale)
     for load in get_components(StandardLoad, sys)
-        load.active_power *= scale
-        load.reactive_power *= scale
+        set_impedance_active_power!(load, get_impedance_active_power(load)*scale)
+        set_current_active_power!(load, get_current_active_power(load)*scale)
+        set_constant_active_power!(load, get_constant_active_power(load)*scale)
+        
+        set_impedance_reactive_power!(load, get_impedance_reactive_power(load)*scale)
+        set_current_reactive_power!(load, get_current_reactive_power(load)*scale)
+        set_constant_reactive_power!(load, get_constant_reactive_power(load)*scale)
     end
     for gen in get_components(Generator, sys)
         if gen.bus.bustype == ACBusTypes.PV
             # set_base_power!(g, g.base_power * p.load_scale)
-            set_active_power!(gen, gen.active_power * scale)
-            set_reactive_power!(gen, gen.reactive_power * scale)
+            set_active_power!(gen, get_active_power(gen) * scale)
+            set_reactive_power!(gen, get_reactive_power(gen) * scale)
         end
     end
     return sys
@@ -177,9 +183,9 @@ gss = GridSearchSys(s, [sm_inj() gfl_inj() gfm_inj();
                         ["Bus1", "Bus 2", "Bus 3"]) # just make sure the busses are in the right order
 set_chunksize(gss, 500)
 
+add_generic_sweep!(gss, "Power Setpoint", set_power_setpt!, collect(0.4:0.1:1.6))
 add_lines_sweep!(gss, [line_params], line_adders)
 add_zipe_sweep!(gss, missing, (x->LoadParams(x...)).(collect(values(η_combos)))) # no standard load adder. already in the system.
-# add_generic_sweep!(gss, "Power Setpoint", set_power_setpt, [0.5, 1.0, 1.5])
 
 add_result!(gss, "Eigenvalues", get_eigenvalues)
 add_result!(gss, "Eigenvectors", get_eigenvectors)
@@ -188,7 +194,7 @@ add_result!(gss, "Simulation Status", get_sim_status)
 add_result!(gss, "Error", get_error)
 add_result!(gss, "sim", get_sim)
 
-executeSims!(gss, BranchTrip(0.5, ACBranch, line_params.alg_line_name), (0.48, 1.0), 0.005, 0.00005, true, "data/fineresults_smallertime")
+executeSims!(gss, BranchTrip(0.5, ACBranch, line_params.alg_line_name), (0.48, 1.0), 0.005, 0.00005, true, "data/fineresults_powersetpt")
 # expand_columns!(gss)
 # save_serde_data(gss, "data/results.jls")
 

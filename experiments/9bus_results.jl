@@ -6,52 +6,63 @@ using PowerSystems
 const PSY = PowerSystems
 using ZIPE_loads
 using InfrastructureSystems
-# using PlotlyJS
+using PlotlyJS
 using DataFrames
 using TLmodels
 using DataFramesMeta
 using LaTeXStrings
-using PyPlot
-const plt = PyPlot
 
-# using PyCall
-# @pyimport mpld3 # if this doesn't work do `pip install mpld3` with the right pip for your pycall
-using Plots
-plotlyjs()
-pygui(true)
+# pygui(true)
 include("sysbuilder.jl")
 
-# set_units_base_system!
+"""
+all things to make functions here backwards compatible with earlier sims we've run, like adding power setpoint column if it's not present
+"""
+function preprocess!(df::DataFrame)
 
-# LOAD DATA
-df = load_serde_data("data/fineresults")
-df2 = load_serde_data("data/results")
-expand_columns!(df)
-expand_columns!(df2)
-df = df3
+    # expand ZIPE params and LineModelParams into individual columns
+    expand_columns!(df)
+
+    if !("Power Setpoint" in names(df))
+        df[!, Symbol("Power Setpoint")] .= 1.0
+    end
+
+    return df
+end
+
+############## LOAD DATA ###############
+## dataset with all cases from paper, no power variation
+# df = preprocess!(load_serde_data("data/fineresults_smallertime"))
+
+## all cases from paper, with power variation
+df = preprocess!(load_serde_data("data/fineresults_powersetpt"))
+
+## massive dataset with all combos of injectors and zipe gridsearch
+# df = preprocess!(load_serde_data("data/results"))
+
 ############### CASES ###################
-case1 = @subset df begin
+case1(df::DataFrame) = @subset df begin
     :"injector at {Bus1}" .== "SM"
     :"injector at {Bus 2}" .== "GFL"
     :"injector at {Bus 3}" .== "GFM"
 end
 
-case2 = @subset df begin
+case2(df::DataFrame) = @subset df begin
     :"injector at {Bus1}" .== "SM"
     :"injector at {Bus 2}" .== "GFM"
     :"injector at {Bus 3}" .== "GFL"
 end
 
-case3 = @subset df begin
+case3(df::DataFrame) = @subset df begin
     :"injector at {Bus1}" .== "GFM"
     :"injector at {Bus 2}" .== "GFL"
     :"injector at {Bus 3}" .== "SM"
 end
 
-cases = Dict(
-    "SM, GFL, GFM" => case1,
-    "SM, GFM, GFL" => case2, 
-    "GFM, GFL, SM" => case3,
+cases(df::DataFrame) = Dict(
+    "SM, GFL, GFM" => case1(df),
+    "SM, GFM, GFL" => case2(df), 
+    "GFM, GFL, SM" => case3(df),
 )
 
 η_combos = Dict(
@@ -65,228 +76,253 @@ cases = Dict(
     "High P Low E Load"   => [0.15, 0.15, 0.55, 0.15],
 )
 
+# list of colors to use in order
+# so it's consistent between all plots
+colorlist = [
+    "#1f77b4",  # muted blue
+    "#ff7f0e",  # safety orange
+    "#2ca02c",  # cooked asparagus green
+    "#d62728",  # brick red
+    "#9467bd",  # muted purple
+    "#8c564b",  # chestnut brown
+    "#e377c2",  # raspberry yogurt pink
+    "#7f7f7f",  # middle gray
+    "#bcbd22",  # curry yellow-green
+    "#17becf"   # blue-teal
+]
+
+"""
+makes fig with rows [statpi, dynpi] and columns [case1, case2, case3].
+
+just a utility for these two plots since I don't want to copy/paste it.
+
+`x_title` and `y_title` are the axis titles for the subplots. `filename` is the filename the plot saves as when you click the "download plot" button.
+"""
+function makefig(df::DataFrame, x_title::Union{String, LaTeXString}, y_title::Union{String, LaTeXString}, filename::String="plot", title_text::Union{String, Nothing}=nothing, yaxis_range::Union{Vector{<:Real}, Nothing}=nothing, slider::Bool=false)
+    sp = Subplots(
+        rows=2, cols=3,
+        shared_xaxes="all", shared_yaxes="all",
+        start_cell = "top-left",
+        column_titles=["Case $i ($key)" for (i, key) in enumerate(keys(cases(df)))],
+        row_titles=["Static Pi Model", "Dynamic Pi Model"],
+        x_title=x_title,
+        y_title=y_title,
+        horizontal_spacing=0.03,
+        vertical_spacing=0.03,
+    )
+
+    layout_kwargs = Dict()
+    if !isnothing(title_text) layout_kwargs[:title_text] = title_text end
+    if !isnothing(yaxis_range) layout_kwargs[:yaxis_range] = yaxis_range end
+    if slider
+        values = sort(unique(df."Power Setpoint"))
+        layout_kwargs[:sliders] = [attr(
+            steps=[
+                attr(
+                    label=string(round(values[i], digits=3)),
+                    method="restyle",
+                    # args=["visible", [j%2==i%2 for j in 1:48]]
+                    # args = [Dict(:visible=>(i%2==0)) for i in 1:48],
+                    # args=[attr(z=(zz[i, :, :],), text=(text[i, :, :],)), 0]
+                )
+                for i in 1:length(values)
+            ],
+            active=1,
+            currentvalue_prefix="Power Setpoint: ",
+            pad_t=40,
+        )]
+    end
+
+    l = Layout(sp; layout_kwargs...)
+
+    fig = PlotlyJS.plot(l, config = PlotConfig(
+        scrollZoom=true,
+        modeBarButtonsToAdd=[
+            "drawline",
+            "drawcircle",
+            "drawrect",
+            "eraseshape"
+        ],
+        toImageButtonOptions=attr(
+            format="svg", # one of png, svg, jpeg, webp
+            filename=filename,
+            height=900,
+            width=1600,
+            scale=1
+        ).fields,
+        displayModeBar=true,
+    ))
+
+    for ax in [:xaxis, :xaxis1, :xaxis2, :xaxis3, :xaxis4, :xaxis5, :xaxis6, :yaxis, :yaxis1, :yaxis2, :yaxis3, :yaxis4, :yaxis5, :yaxis6]
+        fig.plot.layout[ax][:showticklabels] = true
+    end
+    fig.plot.layout.margin[:l] *= 2
+    fig.plot.layout.margin[:b] *= 2
+    fig.plot.layout.margin[:r] *= 2
+    fig.plot.layout.margin[:t] *= 2
+    return fig
+end
+
 
 ################## PLOTTING FUNCTIONS #################
 # Eigenvalue Plot
-function eigplot(df)
-    geteigs(df) = [(name=name, eigs=@subset(df, :z_percent.≈η[1], :i_percent.≈η[2], :p_percent.≈η[3]).Eigenvalues) for (name, η) in (η_combos)]
+function eigplot(df::DataFrame)
+    selectZIPE(df, η) = @subset(df, :z_percent.≈η[1], :i_percent.≈η[2], :p_percent.≈η[3])
+    geteigs(df) = [
+        (
+            name=name, 
+            eigs=Dict(selectZIPE(df, η)."Power Setpoint" .=> selectZIPE(df, η).Eigenvalues)
+        ) 
+        for (name, η) in (η_combos)
+    ]
 
-    stateigs = [(name=casename, data=geteigs(@subset(casedf, :"Line Model" .== "statpi"))) for (casename, casedf) in cases]
-    dyneigs = [(name=casename, data=geteigs(@subset(casedf, :"Line Model" .== "dynpi"))) for (casename, casedf) in cases]
-    
-    fig, axs = plt.subplots(2, 3, sharex=true, sharey=true)
-    # axs[1].set_title("Static Pi Model")
-    # axs[2].set_title("Dynamic Pi Model")
-    fig.tight_layout()
-    # fig, ax = plt.subplots(4, 4, sharex="col", sharey="row", figsize=(8, 8))
-    # fig.subplots_adjust(left=0.05, right=0.95, bottom=0.05, top=0.95,
-    #                 hspace=0.1, wspace=0.1)
-    reals = []
-    imags = []
-    labels = []
+    stateigs = [(name=casename, data=geteigs(@subset(casedf, :"Line Model" .== "statpi"))) for (casename, casedf) in cases(df)]
+    dyneigs = [(name=casename, data=geteigs(@subset(casedf, :"Line Model" .== "dynpi"))) for (casename, casedf) in cases(df)]
+
+    fig = makefig(
+        df,
+        L"\mathrm{Re}(\lambda)", 
+        L"\mathrm{Im}(\lambda)", 
+        "eigenvalue_plot", 
+        "System Eigenvalues over Line Model, Injector Configuration, and ZIPE Parameters",
+        nothing,
+        true
+    )
+    # pwr_setpts = []
+    xs = []
+    # ys = []
     for η_combo_idx in 1:length(η_combos)
-        for inj_case_idx in 1:length(cases)
-            println(stateigs[inj_case_idx].name, stateigs[inj_case_idx].data[η_combo_idx].name, length(stateigs[inj_case_idx].data[η_combo_idx].eigs))
+        for inj_case_idx in 1:length(cases(df))
+            pwr_setpt = 1.0
+            hovertext = "η="*string(η_combos[stateigs[inj_case_idx].data[η_combo_idx].name])
+            # println(stateigs[inj_case_idx].name, stateigs[inj_case_idx].data[η_combo_idx].name, length(stateigs[inj_case_idx].data[η_combo_idx].eigs))
+            η_case = stateigs[inj_case_idx].data[η_combo_idx].name
+            η_case *= ": $(η_combos[η_case])"
             if stateigs[inj_case_idx].data[η_combo_idx].eigs isa Missing
                 println("No data for statpi, case $inj_case_idx ($(stateigs[inj_case_idx].name)), $(stateigs[inj_case_idx].data[η_combo_idx].name)")
             else
-                # scatter!(
-                #     real.(reduce(vcat, stateigs[inj_case_idx].data[η_combo_idx].eigs)), 
-                #     imag.(reduce(vcat, stateigs[inj_case_idx].data[η_combo_idx].eigs)),
-                #     lab=string(stateigs[inj_case_idx].data[η_combo_idx].name),
-                # )
-                push!(reals, real.(reduce(vcat, stateigs[inj_case_idx].data[η_combo_idx].eigs)))
-                push!(imags, imag.(reduce(vcat, stateigs[inj_case_idx].data[η_combo_idx].eigs)))
-                push!(labels, string(stateigs[inj_case_idx].data[η_combo_idx].name))
-
-                axs[2*inj_case_idx-1].scatter(
-                    real.(reduce(vcat, stateigs[inj_case_idx].data[η_combo_idx].eigs)), 
-                    imag.(reduce(vcat, stateigs[inj_case_idx].data[η_combo_idx].eigs)),
-                    label=string(stateigs[inj_case_idx].data[η_combo_idx].name),
-                    s=50,
-                    alpha=0.5
-                )
+                add_trace!(fig, PlotlyJS.scatter(
+                    # x=real(stateigs[inj_case_idx].data[η_combo_idx].eigs[pwr_setpt]),
+                    # y=imag(stateigs[inj_case_idx].data[η_combo_idx].eigs[pwr_setpt]),
+                    mode="markers",
+                    name="Case $(inj_case_idx), statpi",
+                    legendgroup=η_case,
+                    legendgrouptitle_text=η_case,
+                    marker=attr(size=7, color=colorlist[η_combo_idx]),
+                    opacity=0.7,
+                    hovertext=hovertext,
+                    ), row=1, col=inj_case_idx)
+                push!(xs, stateigs[inj_case_idx].data[η_combo_idx].eigs)
             end
-
+                
             if dyneigs[inj_case_idx].data[η_combo_idx].eigs isa Missing
                 println("No data for dynpi, case $inj_case_idx ($(dyneigs[inj_case_idx].name)), $(dyneigs[inj_case_idx].data[η_combo_idx].name)")
             else
-                push!(reals, real.(reduce(vcat, dyneigs[inj_case_idx].data[η_combo_idx].eigs)))
-                push!(imags, imag.(reduce(vcat, dyneigs[inj_case_idx].data[η_combo_idx].eigs)))
-                push!(labels, string(dyneigs[inj_case_idx].data[η_combo_idx].name))
-                axs[2*inj_case_idx].scatter(
-                    real.(reduce(vcat, dyneigs[inj_case_idx].data[η_combo_idx].eigs)), 
-                    imag.(reduce(vcat, dyneigs[inj_case_idx].data[η_combo_idx].eigs)),
-                    label=string(dyneigs[inj_case_idx].data[η_combo_idx].name),
-                    s=50,
-                    alpha=0.5
-                )
-                # scatter!(
-                #     real.(reduce(vcat, dyneigs[inj_case_idx].data[η_combo_idx].eigs)), 
-                #     imag.(reduce(vcat, dyneigs[inj_case_idx].data[η_combo_idx].eigs)),
-                #     lab=string(dyneigs[inj_case_idx].data[η_combo_idx].name),
-                # )
+                add_trace!(fig, PlotlyJS.scatter(
+                    # x=real.(reduce(vcat, dyneigs[inj_case_idx].data[η_combo_idx].eigs[pwr_setpt])),
+                    # y=imag.(reduce(vcat, dyneigs[inj_case_idx].data[η_combo_idx].eigs[pwr_setpt])),
+                    mode="markers",
+                    name="Case $(inj_case_idx), dynpi",
+                    legendgroup=η_case,
+                    legendgrouptitle_text=η_case,
+                    marker=attr(size=7, color=colorlist[η_combo_idx]),
+                    opacity=0.7,
+                    hovertext=hovertext,
+                    ), row=2, col=inj_case_idx)
+                push!(xs, dyneigs[inj_case_idx].data[η_combo_idx].eigs)
+                
             end
         end
     end
-    println(labels)
-    scat = Plots.scatter(reals, imags, layout=(2, 3), label=vec(labels), markeralpha=0.75, size=(1500, 1200))
-    axs[1].set_title("Case 1 ($(collect(keys(cases))[1]))")
-    axs[3].set_title("Case 2 ($(collect(keys(cases))[2]))")
-    axs[5].set_title("Case 3 ($(collect(keys(cases))[3]))")
-    axs[2].set_xlabel(L"\mathrm{Re}(\lambda)")
-    axs[4].set_xlabel(L"\mathrm{Re}(\lambda)")
-    axs[6].set_xlabel(L"\mathrm{Re}(\lambda)")
-    axs[1].set_ylabel("Statpi Model\n\n\n\n"*L"\mathrm{Im}(\lambda)")
-    axs[2].set_ylabel("Dynpi Model\n\n\n\n"*L"\mathrm{Im}(\lambda)")
-    fig.suptitle("System Eigenvalues")
-    map(x->x.legend(), axs)
-    # map(x->x.set_xscale("log"))
-    map(x->x.axvline(x=0, color="black", ls="--", lw=1), axs)
-    plt.show()
-    return scat
+    for (step, pwr_setpt) in zip(fig.plot.layout[:sliders][1].steps, sort(unique(df."Power Setpoint")))
+        step.args = [Dict("x"=>[real(x[pwr_setpt]) for x in xs], "y"=>[imag(x[pwr_setpt]) for x in xs])]
+    end
+
+    return fig
 end
 
-# Max Eig box
-function maxeigbox(df)
-    sta = map(x->maximum(real.(x)), @subset(df, :"Line Model" .== "statpi").Eigenvalues)
-    dyn  = map(x->maximum(real.(x)), @subset(df, :"Line Model" .== "dynpi").Eigenvalues)
-    print(dyn)
-    (fig, axs) = plt.subplots(2, 1, sharex=true)
-    axs[1].boxplot(dyn, vert=false)
-    axs[2].boxplot(sta, vert=false)
-    axs[1].set_title("dynpi")
-    axs[2].set_title("statpi")
-    axs[1].set_xscale("log")
-    fig.suptitle(L"\max_{i}\: \mathrm{Re}(\lambda_i)")
-    plt.show()
-end
+function transient(df::DataFrame)
+    selectZIPE(df, η) = @subset(df, :z_percent.≈η[1], :i_percent.≈η[2], :p_percent.≈η[3])
+    getvoltage(df) = [(name=name, data=Dict(selectZIPE(df, η)."Power Setpoint" .=> selectZIPE(df, η)."Load Voltage at Bus 5")) for (name, η) in (η_combos)]
 
-function transient(df)
-    selectZIPE(df) = vcat([@subset(df, :z_percent.≈η[1], :i_percent.≈η[2], :p_percent.≈η[3]) for (name, η) in (η_combos)]...)
+    statpi = [(name=casename, data=getvoltage(@subset(casedf, :"Line Model" .== "statpi"))) for (casename, casedf) in cases(df)]
+    dynpi = [(name=casename, data=getvoltage(@subset(casedf, :"Line Model" .== "dynpi"))) for (casename, casedf) in cases(df)]
 
-    statpidata = (@subset(selectZIPE(df), :"Line Model" .== "statpi"))
-    dynpidata = (@subset(selectZIPE(df), :"Line Model" .== "dynpi"))
+    fig = makefig(df, L"\mathrm{Time} \:\: \mathrm{[s]}", L"V_\text{rms} \:\: \mathrm{[\ p.u.]}", "transient_plot", "Transient Simulation: Voltage at Bus 5, Branch Trip on Line Bus 5-Bus 4", [0.0, 10.0], true)
+    xs = []
+    for η_combo_idx in 1:length(η_combos)
+        for inj_case_idx in 1:length(cases(df))
+            hovertext = "η="*string(η_combos[statpi[inj_case_idx].data[η_combo_idx].name])
+            η_case = statpi[inj_case_idx].data[η_combo_idx].name
+            η_case *= ": $(η_combos[η_case])"
+            if statpi[inj_case_idx].data[η_combo_idx].data isa Missing
+                println("No data for statpi, case $inj_case_idx ($(statpi[inj_case_idx].name)), $(statpi[inj_case_idx].data[η_combo_idx].name)")
+            else
+                add_trace!(fig, PlotlyJS.scatter(
+                    x0=0.48,# collect(0.48:0.00005:1.0),
+                    dx=0.00005,
+                    # DON'T plot y here, we don't want extra repeat data (all data is included in slider setup)
+                    # y=round.(statpi[inj_case_idx].data[η_combo_idx].data[1.0], sigdigits=4),
+                    # mode="line",
+                    name="Case $(inj_case_idx), statpi",
+                    legendgroup=η_case,
+                    legendgrouptitle_text=η_case,
+                    marker=attr(size=7, color=colorlist[η_combo_idx]),
+                    opacity=0.7,
+                    hovertext=hovertext,
+                    ), row=1, col=inj_case_idx)
+                push!(xs, statpi[inj_case_idx].data[η_combo_idx].data)
 
-    # busses = ["Load Voltage at $i" for i in get_name.(get_components(Bus, df.sim[1].sys))]
-    busses = ["Load Voltage at $i" for i in get_name.(get_bus.(get_components(StandardLoad, first(df.sim).sys)))]
-    fig, axs = plt.subplots(2, length(busses), sharex=true, sharey=true)#, figsize=(25, 15))
-    fig.tight_layout()
-    fig.suptitle("$(first(busses)) for BranchTrip on line Bus 5-Bus 4-i₁")
-    axs[1].set_ylabel("dynpi")
-    axs[2].set_ylabel("statpi")
-    colors = ["tab:blue", "tab:orange", "tab:green", "tab:red", "tab:purple", "tab:brown", "tab:pink", "tab:gray", "tab:olive", "tab:cyan", "b", "g", "r", "c", "m", "y", "k", "w"]
-    colordict = Dict()
-    # axs = [Plot() Plot() Plot(); Plot() Plot() Plot()]
-    
-    # for (j, bus) in enumerate(busses)
-    bus = first(busses)
-    for (j, case) in enumerate(cases)
-        statpidata = (@subset(selectZIPE(last(case)), :"Line Model" .== "statpi"))
-        dynpidata = (@subset(selectZIPE(last(case)), :"Line Model" .== "dynpi"))
-        for row in eachrow(dynpidata)
-            η = round.((row.z_percent, row.i_percent, row.p_percent, row.e_percent), digits=3)
-            if !(η in keys(colordict))
-                colordict[η] = colors[length(colordict)+1]
             end
-
-            if row[bus] isa Missing
-                println("dynpi failure: Z=$(row.z_percent), I=$(row.i_percent), P=$(row.p_percent), E=$(row.e_percent)")
-                axs[1, j].plot([0.48], [0.97], color=colordict[η], label="Z=$(η[1]), I=$(η[2]), P=$(η[3]), E=$(η[4]) [FAIL]")
-                continue
+                
+            if dynpi[inj_case_idx].data[η_combo_idx].data isa Missing
+                println("No data for dynpi, case $inj_case_idx ($(dynpi[inj_case_idx].name)), $(dynpi[inj_case_idx].data[η_combo_idx].name)")
+            else
+                add_trace!(fig, PlotlyJS.scatter(
+                    x0=0.48,# collect(0.48:0.00005:1.0),
+                    dx=0.00005,
+                    # DON'T plot y here, we don't want extra repeat data (all data is included in slider setup)
+                    # y=round.(dynpi[inj_case_idx].data[η_combo_idx].data[1.0], sigdigits=4),
+                    # mode="lines",
+                    name="Case $(inj_case_idx), dynpi",
+                    legendgroup=η_case,
+                    legendgrouptitle_text=η_case,
+                    marker=attr(size=7, color=colorlist[η_combo_idx]),
+                    opacity=0.7,
+                    hovertext=hovertext,
+                    ), row=2, col=inj_case_idx)
+                push!(xs, dynpi[inj_case_idx].data[η_combo_idx].data)
             end
-
-            # addtraces!(axs[1, j], PlotlyJS.scatter(; x=0.48:0.0001:0.55, y=row[bus]))
-            η = round.(η, digits=3)
-            axs[1, j].plot((0.48:0.00005:1.0)[begin : length(row[bus])], row[bus], color=colordict[η], alpha=0.75, label="Z=$(η[1]), I=$(η[2]), P=$(η[3]), E=$(η[4])")
         end
-        for row in eachrow(statpidata)
-            η = round.((row.z_percent, row.i_percent, row.p_percent, row.e_percent), digits=3)
-            if !(η in keys(colordict))
-                colordict[η] = colors[length(colordict)+1]
-            end
+    end
+    for (step, pwr_setpt) in zip(fig.plot.layout[:sliders][1].steps, sort(unique(df."Power Setpoint")))
+        step.args = ["y", [round.(x[pwr_setpt], sigdigits=6) for x in xs]]
+    end
+    return fig
+end
 
-            if row[bus] isa Missing
-                println("statpi failure: Z=$(row.z_percent), I=$(row.i_percent), P=$(row.p_percent), E=$(row.e_percent)")
-                axs[2, j].plot([0.48], [0.97], color=colordict[η], label="Z=$(η[1]), I=$(η[2]), P=$(η[3]), E=$(η[4]) [FAIL]")
-                continue
-            end
-
-            # addtraces!(axs[2, j], PlotlyJS.scatter(; x=0.48:0.0001:0.55, y=row[bus]))
-            axs[2, j].plot(collect(0.48:0.00005:1.0)[begin : length(row[bus])], row[bus], color=colordict[η], alpha=0.75, label="Z=$(η[1]), I=$(η[2]), P=$(η[3]), E=$(η[4])")
+"""
+utility to save `plot` to `filename`.html
+"""
+function savehtmlplot(plot, filename::String=nothing)
+    # if we pass the output of Plot() it's the wrong type
+    if plot isa PlotlyJS.SyncPlot
+        plot = plot.plot
+    end
+    # default filename
+    if isnothing(filename)
+        try # use try/catch here because it could be nothing or it could be a dict with no :filename key or it could be ok
+            filename = plot.config.toImageButtonOptions[:filename]
+        catch
+            filename = "plot.html"
         end
-        axs[1, j].set_ylim([0, 10])
-        axs[2, j].set_ylim([0, 10])
-        axs[1, j].set_title("Case $j ($(first(case)))")
-        axs[2, j].set_xlabel("Time (s)")
-        
-        axs[1, j].legend()#prop=Dict("size"=>5))
-        axs[2, j].legend()#prop=Dict("size"=>5))
     end
-    plt.xlabel("Time (s)")
-    # axs[1].set_ylabel("Voltage")
-    # axs[2].set_ylabel("Voltage")
-    plt.show()
-    # plt.tight_layout()
+    # ensure proper ending
+    if !occursin(r"\.html$", filename)
+         filename *= ".html"
+    end
+    # save to file
+    open(filename, "w") do io
+        PlotlyBase.to_html(io, plot)
+    end
 end
-
-function sillies(df)
-    normal = @subset df begin
-        :"Line Model" .== "statpi"
-        ((x)->(x isa Missing ? false : (x[end]>0.5))).(:"Load Voltage at Bus 5")
-    end
-    bad = @subset df begin
-        :"Line Model" .== "statpi"
-        ((x)->(x isa Missing ? false : (x[end]<0.5))).(:"Load Voltage at Bus 5")
-    end
-    missingdata = @subset df begin
-        :"Line Model" .== "statpi"
-        (x->(x isa Missing)).(:"Load Voltage at Bus 5")
-    end
-    data = [bad, normal, missingdata]
-    data = [((x->x.z_percent).(data)),
-            ((x->x.i_percent).(data)),
-            ((x->x.p_percent).(data)),
-            ((x->x.e_percent).(data))]
-    fig, axs = plt.subplots(4, 1, sharex=true)
-    weights = x->((n->(2/(10*(1.1-n)*(10*(1.1-n)+1)))).(x))
-    axs[1, 1].hist(data[1], histtype="bar", stacked=true, bins=0:0.1:1.1 .- 0.01, weights=weights.(data[1]), label=["anomalous", "normal", "convergence failure"])
-    axs[2, 1].hist(data[2], histtype="bar", stacked=true, bins=0:0.1:1.1 .- 0.01, weights=weights.(data[2]), label=["anomalous", "normal", "convergence failure"])
-    axs[3, 1].hist(data[3], histtype="bar", stacked=true, bins=0:0.1:1.1 .- 0.01, weights=weights.(data[3]), label=["anomalous", "normal", "convergence failure"])
-    axs[4, 1].hist(data[4], histtype="bar", stacked=true, bins=0:0.1:1.1 .- 0.01, weights=weights.(data[4]), label=["anomalous", "normal", "convergence failure"])
-    axs[1, 1].hist
-    fig.legend()
-    map(x->x.set_yscale("log"), axs)
-    plt.show()
-end
-
-function endvoltage(df)
-    statpi = @subset df begin
-        :"Line Model" .== "statpi"
-        ((x)->!(x isa Missing)).(:"Load Voltage at Bus 5")
-    end
-    dynpi = @subset df begin
-        :"Line Model" .== "dynpi"
-        ((x)->!(x isa Missing)).(:"Load Voltage at Bus 5")
-    end
-    fig, axs = plt.subplots(3, sharex=false, sharey=true)
-    axs[1].hist([(x->(x[end]-x[1])).(statpi.var"Load Voltage at Bus 5"),
-                 (x->(x[end]-x[1])).(dynpi.var"Load Voltage at Bus 5")], label=[raw"Static $\pi$ model", raw"Dynamic $\pi$ model"], bins=100)
-    axs[2].hist([(x->(x[end]-x[2])).(statpi.var"Load Voltage at Bus 6"),
-                 (x->(x[end]-x[2])).(dynpi.var"Load Voltage at Bus 6")], label=[raw"Static $\pi$ model", raw"Dynamic $\pi$ model"], bins=100)
-    axs[3].hist([(x->(x[end]-x[3])).(statpi.var"Load Voltage at Bus 8"),
-                 (x->(x[end]-x[4])).(dynpi.var"Load Voltage at Bus 8")], label=[raw"Static $\pi$ model", raw"Dynamic $\pi$ model"], bins=100)
-    for ax in axs
-        ax.set_yscale("log")
-        ax.legend(prop=Dict("size"=>6))
-    end
-    axs[3].set_xlabel(raw"$V(t_f)-V(t_0)$ (pu)")
-    axs[1].set_ylabel("Bus 5\n\n")
-    axs[2].set_ylabel("Bus 6\n\n")
-    axs[3].set_ylabel("Bus 8\n\n")
-    fig.suptitle("Net Voltage Change During Transient Simulation (0.07s)")
-    plt.show()
-
-
-end
-# transient()
