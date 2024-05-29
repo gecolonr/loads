@@ -14,7 +14,6 @@ using CSV
 include("sysbuilder.jl")
 include("../data/build_scripts/device_models.jl")
 
-
 ##################################################################
 ################## MAKE 2-MACHINE BASE SYSTEM ####################
 ##################################################################
@@ -140,10 +139,14 @@ end
 # get all combinations of generators on this system
 gss = GridSearchSys(s, [case_inv(), case_gen()])
 add_lines_sweep!(gss, [line_params], line_adders)
-add_zipe_sweep!(gss, load, map(x->LoadParams(x...), gridsearch()))
+add_zipe_sweep!(gss, load, map(x->LoadParams(x...), [[1.0, 0.0, 0.0, 0.0]]))#gridsearch()))
 
-results_df = executeSims(gss, BranchTrip(0.5, ACBranch, "otherline"), (0.0, 2.0))
+add_result!(gss, "sim", get_sim)
+add_result!(gss, "sm", get_sm)
 
-expand!(results_df)
+# set_chunksize(gss, Inf)
+results_df = executeSims!(gss, BranchTrip(0.5, ACBranch, "otherline"), (0.0, 2.0), 0.05, 0.05, false, mktempdir())
 
-CSV.write("data/results.tsv", results_df, delim='\t')
+# expand!(results_df)
+
+# CSV.write("data/results.tsv", results_df, delim='\t')

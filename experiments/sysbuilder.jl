@@ -493,6 +493,15 @@ end
 """
 [This is a results getter function]
 
+gets the small signal analysis object `sm`
+"""
+function get_sm(_gss::GridSearchSys, _sim::Union{Simulation, Missing}, sm::Union{PSID.SmallSignalOutput, Missing}, _error::Union{String, Missing})
+    return sm
+end
+
+"""
+[This is a results getter function]
+
 **RETURNS A VECTOR!** use a vector of column titles if you want each bus to be a separate column.
 
 gets voltage time series at every bus in the system.
