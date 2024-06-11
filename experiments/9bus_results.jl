@@ -325,6 +325,12 @@ df[!, "tracename"] = map(x->inj_case_names[x[1]]*", "*x[2], zip(df[!, "Injector 
 df[!, "Injector Setup"] = map(x->inj_case_names[x]*" ($x)", df[!, "Injector Setup"])
 df[!, "real_eigs"] = real.(df[!, "Eigenvalues"])
 df[!, "imag_eigs"] = imag.(df[!, "Eigenvalues"])
+function pfactors(sm)
+    pf = summary_participation_factors(sm)
+    return Dict(pf.Name .=> eachrow(select(pf, Not(:Name))))
+end
+df[!, "participation_factors"] = map(sm->get(pfactors(sm), "generator-3-1 ir_cnv", missing), df.sm)
+df[!, "participation_factors"] = map(x->x isa Missing ? x : collect(x), df.participation_factors)
 # then we plot it!
 p = makeplots(
     df;
@@ -356,7 +362,7 @@ p = makeplots(
 )
 
 
-savehtmlplot(p, "media/transient_voltage_bus5")
+savehtmlplot(p, "media/transient_currents_bus3")
 
 
 p = makeplots(
@@ -366,7 +372,7 @@ p = makeplots(
     cols="Injector Setup",
     color=:"ZIPE Parameters",
     trace_names="tracename",
-    hovertext="hovertext",
+    hovertext="participation_factors",
 
     slider="Power Setpoint",
     slider_sort_func = identity,
@@ -388,3 +394,5 @@ p = makeplots(
     image_export_filename = "eigenvalue_plot",
     scatterplot_args = Dict(:mode=>"markers"),
 )
+
+savehtmlplot(p, "media/eigplot_4case")
