@@ -113,108 +113,60 @@ Use [`executeSims`](@ref) to run simulations for all the systems.
 """
 mutable struct GridSearchSys
     base::System
-    header::Vector{String}
+    header::Vector{AbstractString}
     sysdict::Dict{Vector{Any}, Function}
     results_header::Vector{String}
     results_getters::Vector{Function}
     df::DataFrame
     chunksize::Union{Int, Float64}
+    hfile::String
 end
 
-"""
-WARNING: Generally, it's better to use Serialization-based storage, for speed and memory efficiency. This still works, but it's suboptimal.
-
-Load data from Dataframe saved to TSV at `path`. stores this data in gss.df.
-"""
-function load_data!(gss::GridSearchSys, path::String)
-    gss.df = load_data(path)
-end
-
-"""
-helper function for `load_data`
-tries to parse the string. if that fails, just return the string.
-"""
-function parse_result(item::String)
-    try
-        return eval(Meta.parse(item))
-    catch
-        return item
-    end
-end
-
-"""
-WARNING: Generally, it's better to use Serialization-based storage, for speed and memory efficiency. This still works, but it's suboptimal.
-
-Load data from Dataframe saved to TSV at `path`.
-"""
-function load_data(path::String)
-    println("Loading DataFrame...")
-    df = CSV.read(path, DataFrame; delim='\t')
-    println("DataFrame loaded!")
-    for i in names(df)
-        if i == "Eigenvectors"
-            continue
-        end
-        println("Parsing column $i...")
-        lk = ReentrantLock()
-        Threads.@threads for j in 1:length(df[!, i])
-            if !(df[j, i] isa String)
-                continue
-            end
-            try
-                x = eval(Meta.parse(df[j, i]))
-                lock(lk) do 
-                    df[j, i] = x
-                end
-            catch
-                # don't do anything
-            end
-        end
-        # df[!, i] .= map((x)->(x isa String ? parse_result(x) : x), df[:, i])
-    end
-    println("DataFrame loaded and parsed!")
-    return df
-end
-
-"""
-WARNING: This is very inefficient. Use Serialization with `save_serde_data` instead.
-Save the data in `gss.df` to TSV.
-"""
-function save_data(gss::GridSearchSys, path::String)
-    CSV.write(path, gss.df, delim='\t')
-end
 """
 Adds a column to the header. literally just `push!(gss.header, title)`. for cleanliness and encapsulation I guess.
 """
-function add_column!(gss::GridSearchSys, title)
+function _add_column!(gss::GridSearchSys, title)
     push!(gss.header, title)
 end
 
 """
-Add a column to the output dataframe with a result to store.
+Add a column to the output dataframe with a result to store. If `gss.df` isn't empty, computes the result and adds it as a column.
 
 `getter` must have the following signature:
 (GridSearchSys, Simulation, SmallSignalOutput, String)->(Any)
 
 Any of the inputs might be `missing`.
 """
-function add_result!(gss::GridSearchSys, title::String, getter::Function)
+function add_result!(gss::GridSearchSys, title::AbstractString, getter::Function)
+    gss.hfile *= "function $(string(Symbol(getter))) end; "
     push!(gss.results_header, title)
     push!(gss.results_getters, getter)
+    if !isempty(gss.df)
+        gss.df[!, title] .= map(x->getter(gss, x...), eachrow(select(gss.df, "sim", "sm", "error")))
+    end
 end
 
 """
-add multiple columns to the output dataframe with results to store. 
+add multiple columns to the output dataframe with results to store. If `gss.df` isn't empty, computes the result and adds it as a column.
 
 `getter` must have the following signature:
 (GridSearchSys, Simulation, SmallSignalOutput, String)->(Vector{Any})
 
 the output vector must be the same length as `titles` (the column titles), and any of the inputs might be `missing`.
 """
-function add_result!(gss::GridSearchSys, titles::Vector{String}, getter::Function)
+function add_result!(gss::GridSearchSys, titles::Vector{T}, getter::Function) where T <: AbstractString
+    gss.hfile *= "function $(string(Symbol(getter))) end; "
     push!(gss.results_header, titles...)
     push!(gss.results_getters, getter)
+    if !isempty(gss.df)
+        data = map(x->getter(gss, x...), eachrow(select(gss.df, "sim", "sm", "error")))
+        # println(data)
+        for (idx, title) in enumerate(titles)
+            gss.df[!, title] .= map(x->x[idx], data)
+        end
+    end
 end
+
 """
 set the number of rows save in each file (and thus how many to hold in memory before saving to file).
 
@@ -227,6 +179,18 @@ end
 
 """
 constructor for GridSearchSys with the exact same behavior as [`makeSystems`](@ref).
+automatically adds the columns `sim`, `sm`, and `error` to allow results getter methods to be used after saving.
+
+# `makeSystems` reference
+makes all configurations of the given system and injectors, or specific given configurations.
+
+## Args:
+ - `sys::System` : the base system to work off of
+ - `injectors` (array of `DynamicInjection`): injectors to use. if one dimensional, all configurations of the given injectors will be returned. If 2d, each row of `injectors` will represent output configuration.
+ - `busgroups` (array of String or array of `Vector{String}`, optional): if just array of strings, represents list of buses to consider. If array of Vector{String}, each vector of bus names will be grouped together and always receive the same injector type. If not passed, just considers all busses with Generators attached.
+
+## Returns:
+ - `Dict{Vector{String}, System}`: dictionary of {generator names (ordered) => system}. contains all variations.
 """
 function GridSearchSys(sys::System, injectors::Union{AbstractArray{DynamicInjection}, AbstractArray{DynamicInjection, 2}}, busgroups::Union{AbstractArray{Vector{String}}, AbstractArray{String}, Nothing}=nothing, chunksize::Union{Int, Float64}=Inf)
     sysdict = makeSystems(sys, injectors, busgroups)
@@ -247,7 +211,11 @@ function GridSearchSys(sys::System, injectors::Union{AbstractArray{DynamicInject
         header = [join(i, ", ") for i in busgroups]
     end
     header = (x->"injector at {$x}").(header)
-    return GridSearchSys(sys, header, newsysdict, Vector(), Vector(), DataFrame(), chunksize)
+    gss = GridSearchSys(sys, header, newsysdict, Vector(), Vector(), DataFrame(), chunksize, "")
+    add_result!(gss, "error", get_error)
+    add_result!(gss, "sim", get_sim)
+    add_result!(gss, "sm", get_sm)
+    return gss
 end
 
 
@@ -258,13 +226,14 @@ add arbitrary sweeps to a GridSearch.
  - `title` is the name of the variable this sweep changes.
 """
 function add_generic_sweep!(gss::GridSearchSys, title::String, adder::Function, params::Vector{T}) where T
+    gss.hfile *= "function $(string(Symbol(adder))) end; "
     newsysdict = Dict()
     for (key, s) in gss.sysdict
         for p in params
-            newsysdict[[key..., p]] = ((s, p)->(()->adder(s(), p)))(s, p)
+            newsysdict[[key..., p]] = ((s, p, adder)->(()->adder(s(), p)))(s, p, adder)
         end
     end
-    add_column!(gss, title)
+    _add_column!(gss, title)
     gss.sysdict = newsysdict
 end
 
@@ -276,6 +245,7 @@ The standard load should be a function which takes in a system and returns an ap
 function add_zipe_sweep!(gss::GridSearchSys, standardLoadFunction::Union{Function, Missing}, zipe_params::Vector{LoadParams})
     sysdict = deepcopy(gss.sysdict)
     if !(standardLoadFunction isa Missing)
+        gss.hfile *= "function $(string(Symbol(standardLoadFunction))) end; "
         for s in values(sysdict)
             # this is called "currying" or something, idk im not a haskell programmer
             # im hungry, curry sounds good rn
@@ -314,7 +284,7 @@ function add_zipe_sweep!(gss::GridSearchSys, standardLoadFunction::Union{Functio
             gss.sysdict[[key..., params]] = ((params, valarg)->(()->withzipeload(valarg(), params)))(params, val)
         end
     end
-    add_column!(gss, "ZIPE Load Params")
+    _add_column!(gss, "ZIPE Load Params")
 end
 
 """
@@ -324,8 +294,11 @@ adds a sweep over line models and parameters.
 This is based around the TLModels.jl package, so linemodelAdders could for example have the pair `"statpi" =>`[`create_statpi_system`](@ref)
 """
 function add_lines_sweep!(gss::GridSearchSys, lineParams::Vector{LineModelParams}, linemodelAdders::Dict{String, Function}=Dict("statpi"=>create_statpi_system, "dynpi"=>create_dynpi_system, "mssb"=>create_MSSB_system))
-    add_column!(gss, "Line Model")
-    add_column!(gss, "Line Params")
+    for f in values(linemodelAdders)
+        gss.hfile *= "function $(string(Symbol(f))) end; "
+    end
+    _add_column!(gss, "Line Model")
+    _add_column!(gss, "Line Params")
     newsysdict = Dict()
     for (key, val) in gss.sysdict
         for (linename, creator) in linemodelAdders
@@ -354,6 +327,7 @@ end
 
 """
 run simulations on all of the systems in the gridsearch and store the results in a DataFrame.
+If `gss.df` is not empty, duplicate simulations will not be run - if a row can be found for which all config options match, the simulation is skipped.
 
 ## Args
  - `gss::GridSearchSys` : the systems
@@ -371,7 +345,7 @@ In this case, the final chunk will also be deleted from gss.df.
 
 To not save anything to file and keep the results in gss.df, make sure to `set_chunksize(gss, Inf)`.
 """
-function executeSims!(gss::GridSearchSys, change::PSID.Perturbation, tspan::Tuple{Float64, Float64}=(0.48, 0.55), dtmax=0.0001, output_res=0.0001, run_transient::Bool=true, log_path::String="data/sims")
+function executeSims!(gss::GridSearchSys, change::PSID.Perturbation; tspan::Tuple{Float64, Float64}=(0.48, 0.55), dtmax=0.0005, output_res=0.00005, run_transient::Bool=true, log_path::String="data/sims")
     # gen_busses = collect(get_bus.(get_components(Generator, gss.base)))
     # gen_dict = Dict(get_name.(get_components(Generator, gss.base)) .=> get_number.(gen_busses))
     # bus_voltages = (x->"Voltage at Bus $(get_number(x))").(get_components(Bus, gss.base))
@@ -381,7 +355,13 @@ function executeSims!(gss::GridSearchSys, change::PSID.Perturbation, tspan::Tupl
     if !isdir(log_path)
         mkdir(log_path)
     end
-    gss.df = DataFrame([i=>[] for i in [gss.header..., gss.results_header...]])
+    if isempty(gss.df)
+        save = true
+        gss.df = DataFrame([i=>[] for i in [gss.header..., gss.results_header...]])
+    else
+        save = false
+    end
+
     counter = Threads.Atomic{Int}(0)
     total = length(gss)
     function inner(config::Vector{Any}, sys::System)
@@ -393,33 +373,78 @@ function executeSims!(gss::GridSearchSys, change::PSID.Perturbation, tspan::Tupl
     end
     
     lk = ReentrantLock()
-    
+    # if isfinite(gss.chunksize)
+        
     chunk_counter = 0
     Threads.@threads for (key, val) in collect(gss.sysdict)
+        println("setup: $(key), $(val)")
+        # if !isempty(subset(gss.df, [title=>ByRow(x->x==config) for (title, config) in zip(gss.header, key)]))
+        #     i = Threads.atomic_add!(counter, 1) + 1
+        #     println("skipped solve $i/$total ($(round(100.0*i/total))%)")
+        #     println(subset(gss.df, [title=>ByRow(x->x==config) for (title, config) in zip(gss.header, key)]))
+        #     continue
+        # end
         results = inner(deepcopy(key), val())
         lock(lk) do 
             push!(gss.df, results)
-            if size(gss.df, 1) >= gss.chunksize
-                save_serde_data(gss, log_path*"/results$(chunk_counter).jls")
-                deleteat!(gss.df, 1:size(gss.df, 1))
+            if save && (nrow(gss.df) >= gss.chunksize)
+                _save_serde_data(gss.df, log_path*"/results$(chunk_counter).jls")
+                deleteat!(gss.df, 1:nrow(gss.df))
                 chunk_counter += 1
             end
         end
     end
-    if isfinite(gss.chunksize) && size(gss.df, 1)>0
-        save_serde_data(gss, log_path*"/results$(chunk_counter).jls")
-        deleteat!(gss.df, 1:size(gss.df, 1))
+    if save && isfinite(gss.chunksize) && nrow(gss.df)>0
+        _save_serde_data(gss.df, log_path*"/results$(chunk_counter).jls")
+        gss.df = last(gss.df, 0)
+        Serialization.serialize(joinpath(log_path, ".gss"), gss)
+    end
+    if !save && isfinite(gss.chunksize)
+        save_serde_data(gss, log_path)
+
+        # don't delete since we know all data is in fact here
+        # deleteat!(gss.df, 1:nrow(gss.df))
     end
 end
+function _save_serde_data(df::DataFrame, path::String)
+    println("dirname: ", dirname(path))
+    println("path: ", path)
+    if !isdir(dirname(path))
+        mkdir(dirname(path))
+    end
+    Serialization.serialize(path, df)
+end
 """
-serializes the results dataframe and saves it to `path` to be read later using `Serialization.deserialize` (through `load_serde_data`)
+serializes the GridSearchSys and saves it to `path` to be read later using `Serialization.deserialize` (through `load_serde_data`)
+
+deletes all .jls files and the .gss file in `path` if `path` is a directory containing those files.
 """
 function save_serde_data(gss::GridSearchSys, path::String)
-    if isfinite(gss.chunksize)
-        @warn "chunksize is finite, so `gss.df` likely does not contain all results. Saving data currently contained in `gss.df`."
+    if !(gss.base.data.time_series_storage isa InfrastructureSystems.InMemoryTimeSeriesStorage)
+        @warn "Static time series storage detected. System objects may not retain time series data."
     end
-    Serialization.serialize(path, gss.df)
+    if !isdir(path)
+        mkdir(path)
+    else
+        for file in filter(x->occursin(r"\.jls", x) || (x==".gss"), readdir(path))
+            rm(joinpath(path, file))
+        end
+    end
+    index = 0
+    while nrow(gss.df)>0
+        Serialization.serialize(joinpath(path, "results$(index).jls"), first(gss.df, isfinite(gss.chunksize) ? gss.chunksize : nrow(gss.df)))
+        rowsleft = nrow(gss.df) - gss.chunksize
+        println("INDEX: $index, ROWSLEFT: $(rowsleft)")
+        rowsleft = Int(max(rowsleft, 0)) # if chunksize is inf, rowsleft would be -Inf
+        println("REAL ROWS LEFT: $(rowsleft)")
+        println(nrow(gss.df))
+        println(gss.chunksize)
+        gss.df = last(gss.df, rowsleft)
+        index += 1
+    end
+    Serialization.serialize(joinpath(path, ".gss"), gss)
 end
+
 """
 Loads serialized dataframe from file or folder.
 
@@ -427,10 +452,20 @@ If `path` is a folder, looks for all non-hidden .jls files, reads them, and conc
 """
 function load_serde_data(path::String)
     if !isdir(path)
+        if !isfile(path) AssertionError("Could not load data from path: `$path` does not exist.") end
         return Serialization.deserialize(path)
     end
-
-    files = [path*"/"*file for file in readdir(path) if (file[1]!='.')&&(file[end-3:end]==".jls")]
+    # files = collect(
+    # map(   file -> path*"/"*file, 
+    # filter(file -> (file[1]!='.')&&(file[end-3:end]==".jls"), 
+    #     readdir(path)
+    # )))
+    files = [joinpath(path, file) for file in readdir(path) if (file[1]!='.')&&(file[end-3:end]==".jls")]
+    if ".gss" ∈ readdir(path)
+        gss = load_serde_data(joinpath(path, ".gss"))
+        eval(Meta.parse(gss.hfile))
+    end
+    println(files)
     dfs = Vector{DataFrame}(undef, length(files))
     counter = Threads.Atomic{Int}(0)
     progress_bar_width() = displaysize(stdout)[2]-28-Int(2*(floor(log10(length(files)))+1))-length(path)
@@ -443,7 +478,14 @@ function load_serde_data(path::String)
         print("\rReading files from $path: |"*("@"^boxes)*(" "^(progress_bar_width()-boxes))*"| ($files_read/$(length(files)))")
     end
     println("\nDone!")
-    return vcat(dfs...)
+    if ".gss" ∈ readdir(path)
+        gss = load_serde_data(joinpath(path, ".gss"))
+        Meta.parse(gss.hfile)
+        gss.df = vcat(dfs...)
+        return gss
+    else
+        return vcat(dfs...)
+    end
 end
 
 """
@@ -522,16 +564,29 @@ end
 Returns a vector with an entry for each `Generator` in the system. If there's an inverter there, the entry is a time series of the current magnitude. Otherwise, it's `missing`.
 """
 function get_inverter_currents(gss::GridSearchSys, sim::Union{Simulation, Missing}, _sm::Union{PSID.SmallSignalOutput, Missing}, _error::Union{String, Missing})
-    throw("unimplemented: not working yet")
+    gens = get_components(Generator, gss.base)
     if sim isa Missing
-        return Array{Missing}(missing, length(get_components(Generator, gss.base)))
+        return Array{Missing}(missing, length(gens))
     end
-    gen_busses = collect(get_bus.(get_components(Generator, gss.base)))
-    gen_dict = Dict(get_name.(get_components(Generator, gss.base)) .=> get_number.(gen_busses))
-    inverters = [i for i in get_components(DynamicInverter, sys) if i.name in keys(gen_dict)]
+    gen_dict = Dict(get_name.(gens) .=> get_number.(get_bus.(gens)))
+    inverters = [i for i in get_components(DynamicInverter, sim.sys) if i.name in keys(gen_dict)] # get dynamic inverters. filter by those in gen_dict (ie, in gss.base) to exclude ZIPE inverters
+    # println(gen_dict)
+    # println(get_name.(inverters))
     inverters = Dict(map(x->gen_dict[x], get_name.(inverters)) .=> inverters)
-    return [(i in keys(inverters) ? current_magnitude(res, inverters[i].name) : missing) for i in get_number.(gen_busses)]
+    # println(keys(inverters))
+    # println(get_name.(values(inverters)))
+    return [(i in keys(inverters) ? current_magnitude(read_results(sim), inverters[i].name) : missing) for i in get_number.(get_bus.(gens))]
 end
+
+# function get_injector_currents(gss::GridSearchSys, sim::Union{Simulation, Missing}, _sm::Union{PSID.SmallSignalOutput, Missing}, _error::Union{String, Missing})
+#     if sim isa Missing
+#         return Array{Missing}(missing, length(get_components(Generator, gss.base)))
+#     end
+#     gens = get_components(Generator, gss.base)
+#     gen_busses = collect(get_bus.(gens))
+#     gen_dict = Dict(get_name.(gens) .=> get_number.(get_bus.(gens)))
+#     # inverters = Dict((map(x->gen_dict[x]), get_name.(inverters)))
+
 
 
 """
@@ -617,8 +672,10 @@ extract array of current magnitude over time at the object with name `name` from
 Timestamps are thrown away. If you're using the GridSearchSystem, the returned array will correspond to an even time grid with spacing `dtmax` (the argument you passed to [`executeSims`](@ref), default 0.02s).
 """
 function current_magnitude(res::SimulationResults, name::String)
-    _, ir = get_state_series(res, (name, :ir_cnv))
-    _, ii = get_state_series(res, (name, :ii_cnv))
+    _, ir = PSID.post_proc_real_current_series(res, name, nothing)
+    _, ii = PSID.post_proc_imaginary_current_series(res, name, nothing)
+    # _, ir = get_state_series(res, (name, :ir_cnv))
+    # _, ii = get_state_series(res, (name, :ii_cnv))
     return sqrt.(ir.^2 .+ ii.^2)
 end
 
@@ -681,7 +738,7 @@ function runSim(system, change=BranchTrip(0.5, ACBranch, "Bus 5-Bus 4-i_1"), mod
     tic = Base.time_ns()
     local sim, sm
     solve_ac_powerflow!(system)
-    println("HERE1")
+    # println("HERE1")
     sim = Simulation(
         model,
         system,
@@ -691,10 +748,10 @@ function runSim(system, change=BranchTrip(0.5, ACBranch, "Bus 5-Bus 4-i_1"), mod
         disable_timer_outputs=true, # needed for multiprocessing
         # initialize_simulation=false,
     )
-    println("HERE2")
+    # println("HERE2")
     try
         sm = small_signal_analysis(sim)
-        println(sm)
+        # println(sm)
     catch err
         return (sim, missing, Base.time_ns()-tic, "Small Signal Analysis failed with error $err")
     end

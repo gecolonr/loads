@@ -12,8 +12,8 @@ using TLmodels
 using CSV
 using DataFramesMeta
 using LaTeXStrings
-using PyPlot
-const plt = PyPlot
+# using PyPlot
+# const plt = PyPlot
 # pygui(true)
 
 include("sysbuilder.jl")
@@ -25,7 +25,7 @@ include("../data/build_scripts/device_models.jl")
 ##################################################################
 
 # system from 9 bus base system
-s = System(joinpath(pwd(), "data/raw_data/WSCC_9bus.raw"))
+s = System(joinpath(pwd(), "data/raw_data/WSCC_9bus.raw"), time_series_in_memory=true)
 
 ##################################################################
 ############ MACHINES FOR INV/GEN SWEEP ##########################
@@ -150,7 +150,7 @@ zipe_combos = [
 ###################### POWER SETPOINT ############################
 ##################################################################
 
-function set_power_setpt!(sys, scale)
+function set_power_setpt!(sys::System, scale::Real)
     for load in get_components(StandardLoad, sys)
         set_impedance_active_power!(load, get_impedance_active_power(load)*scale)
         set_current_active_power!(load, get_current_active_power(load)*scale)
@@ -179,7 +179,8 @@ end
 
 gss = GridSearchSys(s, [sm_inj() gfl_inj() gfm_inj(); 
                         sm_inj() gfm_inj() gfl_inj(); 
-                        gfm_inj() gfl_inj() sm_inj()],
+                        gfm_inj() gfl_inj() sm_inj();
+                        sm_inj() sm_inj() sm_inj()],
                         ["Bus1", "Bus 2", "Bus 3"]) # just make sure the busses are in the right order
 set_chunksize(gss, 500)
 
@@ -188,13 +189,9 @@ add_lines_sweep!(gss, [line_params], line_adders)
 add_zipe_sweep!(gss, missing, (x->LoadParams(x...)).(collect(values(η_combos)))) # no standard load adder. already in the system.
 
 add_result!(gss, "Eigenvalues", get_eigenvalues)
-add_result!(gss, "Eigenvectors", get_eigenvectors)
+# add_result!(gss, "Eigenvectors", get_eigenvectors)
 add_result!(gss, ["Load Voltage at $busname" for busname in get_name.(get_bus.(get_components(StandardLoad, gss.base)))], get_zipe_load_voltages)
-add_result!(gss, "Simulation Status", get_sim_status)
-add_result!(gss, "Error", get_error)
-add_result!(gss, "sim", get_sim)
 
-executeSims!(gss, BranchTrip(0.5, ACBranch, line_params.alg_line_name), (0.48, 1.0), 0.005, 0.00005, true, "data/fineresults_powersetpt")
-# expand_columns!(gss)
-# save_serde_data(gss, "data/results.jls")
+
+executeSims!(gss, BranchTrip(0.5, ACBranch, line_params.alg_line_name), tspan=(0.48, 1.0), dtmax=0.005, output_res=0.00005, run_transient=true, log_path="data/fineresults_powersetpt")
 
