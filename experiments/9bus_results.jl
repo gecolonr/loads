@@ -254,7 +254,7 @@ function makeplots(
                 if !isnothing(trace_names) scatargs[:name]=data[!, trace_names][1] end
                 if !isnothing(color)
                     scatargs[:legendgroup]=coloridx
-                    scatargs[:legendgrouptitle_text]=color
+                    scatargs[:legendgrouptitle_text]=colorval
                 end
                 if !isnothing(hovertext) scatargs[:hovertext]=data[!, hovertext][1] end
 
@@ -337,7 +337,7 @@ p = makeplots(
 
     rows="Line Model",
     cols="Injector Setup",
-    color=:"ZIPE Parameters",
+    color="ZIPE Parameters",
     trace_names="tracename",
     hovertext="hovertext",
 
