@@ -569,13 +569,14 @@ function get_inverter_currents(gss::GridSearchSys, sim::Union{Simulation, Missin
         return Array{Missing}(missing, length(gens))
     end
     gen_dict = Dict(get_name.(gens) .=> get_number.(get_bus.(gens)))
-    inverters = [i for i in get_components(DynamicInverter, sim.sys) if i.name in keys(gen_dict)] # get dynamic inverters. filter by those in gen_dict (ie, in gss.base) to exclude ZIPE inverters
+    # inverters = [i for i in get_components(DynamicInverter, sim.sys) if i.name in keys(gen_dict)] # get dynamic inverters. filter by those in gen_dict (ie, in gss.base) to exclude ZIPE inverters
+    inverters = [i for i in PSID.get_dynamic_injectors(sim.inputs) if get_name(i) in keys(gen_dict)] # get dynamic inverters. filter by those in gen_dict (ie, in gss.base) to exclude ZIPE inverters
     # println(gen_dict)
     # println(get_name.(inverters))
     inverters = Dict(map(x->gen_dict[x], get_name.(inverters)) .=> inverters)
     # println(keys(inverters))
     # println(get_name.(values(inverters)))
-    return [(i in keys(inverters) ? current_magnitude(read_results(sim), inverters[i].name) : missing) for i in get_number.(get_bus.(gens))]
+    return [(i in keys(inverters) ? current_magnitude(read_results(sim), get_name(inverters[i])) : missing) for i in get_number.(get_bus.(gens))]
 end
 
 # function get_injector_currents(gss::GridSearchSys, sim::Union{Simulation, Missing}, _sm::Union{PSID.SmallSignalOutput, Missing}, _error::Union{String, Missing})

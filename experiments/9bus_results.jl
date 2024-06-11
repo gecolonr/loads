@@ -341,18 +341,18 @@ p = makeplots(
     slider_current_value_prefix="Power Setpoint: ",
 
     x=(x0=0.48, dx=0.00005),
-    y=["Bus 3 Inverter Current", "Load Voltage at Bus 5"][2],
+    y=["Bus 3 Inverter Current", "Load Voltage at Bus 5"][1],
     x_title=L"\mathrm{Time}\:\: [\mathrm{s}]",
-    y_title = L"\mathrm{Volage}\:\:[\mathrm{p.u.}]",
+    y_title = L"\mathrm{Current}\:\:[\mathrm{p.u.}]",
 
     col_titles="Injector Setup",
     row_titles="Line Model",
-    supertitle="Load Voltage at Bus 5",
+    supertitle="Bus 3 Injector Current",
 
     yaxis_home_range = (min=0, max=10),
     xaxis_home_range = nothing,
 
-    image_export_filename = "transient_voltage_plot",
+    image_export_filename = "transient_current_plot",
 )
 
 
