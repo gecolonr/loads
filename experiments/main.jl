@@ -145,7 +145,7 @@ add_result!(gss, "sim", get_sim)
 add_result!(gss, "sm", get_sm)
 
 # set_chunksize(gss, Inf)
-results_df = executeSims!(gss, BranchTrip(0.5, ACBranch, "otherline"), (0.0, 2.0), 0.05, 0.05, false, mktempdir())
+results_df = execute_sims!(gss, BranchTrip(0.5, ACBranch, "otherline"), (0.0, 2.0), 0.05, 0.05, false, mktempdir())
 
 # expand!(results_df)
 

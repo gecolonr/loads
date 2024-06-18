@@ -73,6 +73,7 @@ capacitance_csv = "../TLModels.jl/data/cable_data/dommel_data_C.csv"
 M = 3
 z_km, y_km, z_km_ω, Z_c = get_line_parameters_from_data(impedance_csv, capacitance_csv, M)
 
+
 line_length_dict = Dict(
     "Bus 5-Bus 4-i_1" => 90,
     "Bus 7-Bus 8-i_1" => 80,
@@ -146,6 +147,9 @@ zipe_combos = [
     "Low P Low E Load"   => [0.15, 0.15, 0.55, 0.15],
 )
 
+η_combos = vcat((x->[round.([(1-x)/2, (1-x)/2, x, 0], digits=3), 
+                     round.([(1-x)/2, (1-x)/2, 0, x], digits=3)]).(0:0.1:1)...)
+
 ##################################################################
 ###################### POWER SETPOINT ############################
 ##################################################################
@@ -180,18 +184,19 @@ end
 gss = GridSearchSys(s, [sm_inj() gfl_inj() gfm_inj(); 
                         sm_inj() gfm_inj() gfl_inj(); 
                         gfm_inj() gfl_inj() sm_inj();
+                        gfm_inj() gfm_inj() sm_inj();
+                        gfm_inj() sm_inj() sm_inj();
                         sm_inj() sm_inj() sm_inj()],
                         ["Bus1", "Bus 2", "Bus 3"]) # just make sure the busses are in the right order
-set_chunksize(gss, 500)
+set_chunksize(gss, 200)
 
-add_generic_sweep!(gss, "Power Setpoint", set_power_setpt!, collect(0.4:0.1:1.6))
+add_generic_sweep!(gss, "Power Setpoint", set_power_setpt!, collect(0.2:0.1:1.4))
 add_lines_sweep!(gss, [line_params], line_adders)
-add_zipe_sweep!(gss, missing, (x->LoadParams(x...)).(collect(values(η_combos)))) # no standard load adder. already in the system.
+add_zipe_sweep!(gss, missing, (x->LoadParams(x...)).(η_combos)) # no standard load adder. already in the system.
 
 add_result!(gss, "Eigenvalues", get_eigenvalues)
 # add_result!(gss, "Eigenvectors", get_eigenvectors)
-add_result!(gss, ["Load Voltage at $busname" for busname in get_name.(get_bus.(get_components(StandardLoad, gss.base)))], get_zipe_load_voltages)
+# add_result!(gss, ["Load Voltage at $busname" for busname in get_name.(get_bus.(get_components(StandardLoad, gss.base)))], get_zipe_load_voltages)
 
 
-executeSims!(gss, BranchTrip(0.5, ACBranch, line_params.alg_line_name), tspan=(0.48, 1.0), dtmax=0.005, output_res=0.00005, run_transient=true, log_path="data/fineresults_powersetpt")
-
+execute_sims!(gss, BranchTrip(0.5, ACBranch, line_params.alg_line_name), tspan=(0.48, 1.0), dtmax=0.005, output_res=0.00005, run_transient=true, log_path="data/fineresults_powersetpt")

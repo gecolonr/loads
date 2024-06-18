@@ -98,7 +98,7 @@ end
 """
 Struct to hold all the systems to iterate through.
 Create a GridSearchSys with the constructor whose signature matches the [`makeSystems`](@ref) method. This will start you off with combinations of injectors. Then you can add a ZIPE load sweep with [`add_zipe_sweep`](@ref) or a line model sweep with [`add_lines_sweep`](@ref).
-Use [`executeSims`](@ref) to run simulations for all the systems.
+Use [`execute_sims`](@ref) to run simulations for all the systems.
 
 `length` and `size` are implemented to give the number of systems and (number of systems, number of columns in header).
 
@@ -120,6 +120,20 @@ mutable struct GridSearchSys
     df::DataFrame
     chunksize::Union{Int, Float64}
     hfile::String
+end
+
+
+function Base.show(io::IO, gss::GridSearchSys)
+    print(io, """
+    GridSearchSys
+      base: System (Busses: $(PSID.get_n_buses(gss.base)))
+      header: $(string(gss.header))
+      sysdict: Dict{Vector{Any}, Function} with $(length(gss.sysdict)) entries
+      results_header: $(string(gss.results_header))
+      results_getters: $(string(gss.results_getters))
+      df: $(nrow(gss.df))x$(ncol(gss.df)) DataFrame
+      chunksize: $(gss.chunksize)
+      hfile: $(count(';', gss.hfile)) function declarations""")
 end
 
 """
@@ -192,7 +206,10 @@ makes all configurations of the given system and injectors, or specific given co
 ## Returns:
  - `Dict{Vector{String}, System}`: dictionary of {generator names (ordered) => system}. contains all variations.
 """
-function GridSearchSys(sys::System, injectors::Union{AbstractArray{DynamicInjection}, AbstractArray{DynamicInjection, 2}}, busgroups::Union{AbstractArray{Vector{String}}, AbstractArray{String}, Nothing}=nothing, chunksize::Union{Int, Float64}=Inf)
+function GridSearchSys(sys::System, injectors::Union{AbstractArray{DynamicInjection}, AbstractArray{DynamicInjection, 2}}, busgroups::Union{AbstractArray{Vector{String}}, AbstractArray{String}, Nothing}=nothing)
+    if !(sys.data.time_series_storage isa InfrastructureSystems.InMemoryTimeSeriesStorage)
+        @warn "Static time series storage detected. Saving to file may miss system time series storage."
+    end
     sysdict = makeSystems(sys, injectors, busgroups)
     newsysdict = Dict()
     for (key, val) in sysdict
@@ -211,7 +228,7 @@ function GridSearchSys(sys::System, injectors::Union{AbstractArray{DynamicInject
         header = [join(i, ", ") for i in busgroups]
     end
     header = (x->"injector at {$x}").(header)
-    gss = GridSearchSys(sys, header, newsysdict, Vector(), Vector(), DataFrame(), chunksize, "")
+    gss = GridSearchSys(sys, header, newsysdict, Vector(), Vector(), DataFrame(), Inf, "")
     add_result!(gss, "error", get_error)
     add_result!(gss, "sim", get_sim)
     add_result!(gss, "sm", get_sm)
@@ -327,7 +344,6 @@ end
 
 """
 run simulations on all of the systems in the gridsearch and store the results in a DataFrame.
-If `gss.df` is not empty, duplicate simulations will not be run - if a row can be found for which all config options match, the simulation is skipped.
 
 ## Args
  - `gss::GridSearchSys` : the systems
@@ -345,7 +361,7 @@ In this case, the final chunk will also be deleted from gss.df.
 
 To not save anything to file and keep the results in gss.df, make sure to `set_chunksize(gss, Inf)`.
 """
-function executeSims!(gss::GridSearchSys, change::PSID.Perturbation; tspan::Tuple{Float64, Float64}=(0.48, 0.55), dtmax=0.0005, output_res=0.00005, run_transient::Bool=true, log_path::String="data/sims")
+function execute_sims!(gss::GridSearchSys, change::PSID.Perturbation; tspan::Tuple{Float64, Float64}=(0.48, 0.55), dtmax=0.0005, output_res=0.00005, run_transient::Bool=true, log_path::String="data/sims")
     # gen_busses = collect(get_bus.(get_components(Generator, gss.base)))
     # gen_dict = Dict(get_name.(get_components(Generator, gss.base)) .=> get_number.(gen_busses))
     # bus_voltages = (x->"Voltage at Bus $(get_number(x))").(get_components(Bus, gss.base))
@@ -398,6 +414,9 @@ function executeSims!(gss::GridSearchSys, change::PSID.Perturbation; tspan::Tupl
         _save_serde_data(gss.df, log_path*"/results$(chunk_counter).jls")
         gss.df = last(gss.df, 0)
         Serialization.serialize(joinpath(log_path, ".gss"), gss)
+        open(joinpath(path, ".hfile"), "w") do file
+            write(file, gss.hfile)
+        end
     end
     if !save && isfinite(gss.chunksize)
         save_serde_data(gss, log_path)
@@ -426,23 +445,41 @@ function save_serde_data(gss::GridSearchSys, path::String)
     if !isdir(path)
         mkdir(path)
     else
-        for file in filter(x->occursin(r"\.jls", x) || (x==".gss"), readdir(path))
+        for file in filter(x->occursin(r"\.jls", x) || (x ∈ [".gss", ".hfile"]), readdir(path))
             rm(joinpath(path, file))
         end
     end
-    index = 0
-    while nrow(gss.df)>0
-        Serialization.serialize(joinpath(path, "results$(index).jls"), first(gss.df, isfinite(gss.chunksize) ? gss.chunksize : nrow(gss.df)))
-        rowsleft = nrow(gss.df) - gss.chunksize
-        println("INDEX: $index, ROWSLEFT: $(rowsleft)")
-        rowsleft = Int(max(rowsleft, 0)) # if chunksize is inf, rowsleft would be -Inf
-        println("REAL ROWS LEFT: $(rowsleft)")
-        println(nrow(gss.df))
-        println(gss.chunksize)
-        gss.df = last(gss.df, rowsleft)
-        index += 1
+    counter = Threads.Atomic{Int}(0)
+    numfiles = Int(ceil(nrow(gss.df)/gss.chunksize))+1
+    progress_bar_width() = displaysize(stdout)[2]-28-Int(2*(floor(log10(numfiles))+1))-length(path)
+    print("Writing files to $path: |"*(" "^progress_bar_width())*"| (0/$(numfiles))")
+    Threads.@threads for (i, df) in collect(enumerate(Iterators.partition(gss.df, isfinite(gss.chunksize) ? gss.chunksize : nrow(gss.df))))
+        Serialization.serialize(joinpath(path, "results$(i).jls"), df)
+        files_written = Threads.atomic_add!(counter, 1) + 1
+        boxes = Int(round((files_written/numfiles)*progress_bar_width()))
+        print("\r"*(" "^(displaysize(stdout)[2])))
+        print("\rWriting files to $path: |"*("@"^boxes)*(" "^(progress_bar_width()-boxes))*"| ($files_written/$numfiles)")
     end
-    Serialization.serialize(joinpath(path, ".gss"), gss)
+
+    Serialization.serialize(
+        joinpath(path, ".gss"),
+        GridSearchSys(
+            gss.base,
+            gss.header,
+            gss.sysdict,
+            gss.results_header,
+            gss.results_getters,
+            last(gss.df, 0),
+            gss.chunksize,
+            gss.hfile,
+        )
+    )
+    print("\rWriting files to $path: |"*("@"^progress_bar_width())*"| ($numfiles/$numfiles)\n")
+
+    open(joinpath(path, ".hfile"), "w") do file
+        write(file, gss.hfile);
+    end
+    println("Done!")
 end
 
 """
@@ -455,17 +492,16 @@ function load_serde_data(path::String)
         if !isfile(path) AssertionError("Could not load data from path: `$path` does not exist.") end
         return Serialization.deserialize(path)
     end
-    # files = collect(
-    # map(   file -> path*"/"*file, 
-    # filter(file -> (file[1]!='.')&&(file[end-3:end]==".jls"), 
-    #     readdir(path)
-    # )))
-    files = [joinpath(path, file) for file in readdir(path) if (file[1]!='.')&&(file[end-3:end]==".jls")]
-    if ".gss" ∈ readdir(path)
-        gss = load_serde_data(joinpath(path, ".gss"))
-        eval(Meta.parse(gss.hfile))
+    files = collect(
+    map(   file -> path*"/"*file, 
+    filter(file -> (file[1]!='.')&&(file[end-3:end]==".jls"), 
+        readdir(path)
+    )))
+    # files = [joinpath(path, file) for file in readdir(path) if (file[1]!='.')&&(file[end-3:end]==".jls")]
+    if ".hfile" ∈ readdir(path)
+        include(joinpath(path, ".hfile"))
     end
-    println(files)
+    # println(files)
     dfs = Vector{DataFrame}(undef, length(files))
     counter = Threads.Atomic{Int}(0)
     progress_bar_width() = displaysize(stdout)[2]-28-Int(2*(floor(log10(length(files)))+1))-length(path)
@@ -561,7 +597,27 @@ end
 
 **RETURNS A VECTOR!** use a vector of column titles if you want each inverter to be a separate column.
 
-Returns a vector with an entry for each `Generator` in the system. If there's an inverter there, the entry is a time series of the current magnitude. Otherwise, it's `missing`.
+Returns a vector with an entry for each `Generator` in the base system. Each entry is a time series of the current magnitude.
+"""
+function get_injector_currents(gss::GridSearchSys, sim::Union{Simulation, Missing}, _sm::Union{PSID.SmallSignalOutput, Missing}, _error::Union{String, Missing})
+    gens = get_components(Generator, gss.base)
+    if sim isa Missing
+        return Array{Missing}(missing, length(gens))
+    end
+    gen_dict = Dict(get_name.(gens) .=> get_number.(get_bus.(gens)))
+    # get dynamic injectors. filter by those in gen_dict (ie, in gss.base) to exclude ZIPE inverters
+    injectors = [i for i in PSID.get_dynamic_injectors(sim.inputs) if get_name(i) in keys(gen_dict)]
+    injectors = Dict(map(x->gen_dict[x], get_name.(injectors)) .=> injectors)
+
+    return [(i in keys(injectors) ? current_magnitude(read_results(sim), get_name(injectors[i])) : missing) for i in get_number.(get_bus.(gens))]
+end
+
+"""
+[This is a results getter function]
+
+**RETURNS A VECTOR!** use a vector of column titles if you want each inverter to be a separate column.
+
+Returns a vector with an entry for each `Generator` in the base system. If there is an inverter there, the entry is a time series of the current magnitude. Otherwise, it's `missing`.
 """
 function get_inverter_currents(gss::GridSearchSys, sim::Union{Simulation, Missing}, _sm::Union{PSID.SmallSignalOutput, Missing}, _error::Union{String, Missing})
     gens = get_components(Generator, gss.base)
@@ -569,25 +625,11 @@ function get_inverter_currents(gss::GridSearchSys, sim::Union{Simulation, Missin
         return Array{Missing}(missing, length(gens))
     end
     gen_dict = Dict(get_name.(gens) .=> get_number.(get_bus.(gens)))
-    # inverters = [i for i in get_components(DynamicInverter, sim.sys) if i.name in keys(gen_dict)] # get dynamic inverters. filter by those in gen_dict (ie, in gss.base) to exclude ZIPE inverters
-    inverters = [i for i in PSID.get_dynamic_injectors(sim.inputs) if get_name(i) in keys(gen_dict)] # get dynamic inverters. filter by those in gen_dict (ie, in gss.base) to exclude ZIPE inverters
-    # println(gen_dict)
-    # println(get_name.(inverters))
+    # get dynamic inverters. filter by those in gen_dict (ie, in gss.base) to exclude ZIPE inverters
+    inverters = [i for i in get_components(DynamicInverter, sim.sys) if get_name(i) in keys(gen_dict)]
     inverters = Dict(map(x->gen_dict[x], get_name.(inverters)) .=> inverters)
-    # println(keys(inverters))
-    # println(get_name.(values(inverters)))
     return [(i in keys(inverters) ? current_magnitude(read_results(sim), get_name(inverters[i])) : missing) for i in get_number.(get_bus.(gens))]
 end
-
-# function get_injector_currents(gss::GridSearchSys, sim::Union{Simulation, Missing}, _sm::Union{PSID.SmallSignalOutput, Missing}, _error::Union{String, Missing})
-#     if sim isa Missing
-#         return Array{Missing}(missing, length(get_components(Generator, gss.base)))
-#     end
-#     gens = get_components(Generator, gss.base)
-#     gen_busses = collect(get_bus.(gens))
-#     gen_dict = Dict(get_name.(gens) .=> get_number.(get_bus.(gens)))
-#     # inverters = Dict((map(x->gen_dict[x]), get_name.(inverters)))
-
 
 
 """
@@ -670,7 +712,7 @@ end
 """
 extract array of current magnitude over time at the object with name `name` from the simulation results `res`.
 
-Timestamps are thrown away. If you're using the GridSearchSystem, the returned array will correspond to an even time grid with spacing `dtmax` (the argument you passed to [`executeSims`](@ref), default 0.02s).
+Timestamps are thrown away. If you're using the GridSearchSystem, the returned array will correspond to an even time grid with spacing `dtmax` (the argument you passed to [`execute_sims`](@ref), default 0.02s).
 """
 function current_magnitude(res::SimulationResults, name::String)
     _, ir = PSID.post_proc_real_current_series(res, name, nothing)
@@ -681,7 +723,7 @@ function current_magnitude(res::SimulationResults, name::String)
 end
 
 """
-extracts generator speed time series from `res`. Time discretization is even `dtmax` (the argument you passed to [`executeSims`](@ref), default 0.02s)
+extracts generator speed time series from `res`. Time discretization is even `dtmax` (the argument you passed to [`execute_sims`](@ref), default 0.02s)
 """
 function generator_speed(res::SimulationResults, name::String)
     return get_state_series(res, (name, :ω))[2]
