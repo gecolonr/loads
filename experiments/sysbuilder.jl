@@ -186,7 +186,7 @@ set the number of rows save in each file (and thus how many to hold in memory be
 
 Set to `Inf` to hold all rows in memory (useful for small datasets and to allow use of the dataframe immediately after running the sims)
 """
-function set_chunksize(gss::GridSearchSys, chunksize::Union{Int, Float64})
+function set_chunksize!(gss::GridSearchSys, chunksize::Union{Int, Float64})
     @assert chunksize>=1.0 "invalid chunksize: can't save chunks of zero or negative size"
     gss.chunksize = chunksize
 end
@@ -344,6 +344,7 @@ end
 
 """
 run simulations on all of the systems in the gridsearch and store the results in a DataFrame.
+Fully parallelized.
 
 ## Args
  - `gss::GridSearchSys` : the systems
@@ -353,35 +354,36 @@ run simulations on all of the systems in the gridsearch and store the results in
  - `output_res::Float64` : resolution of saved timeseries results
  - `run_transient::Bool` : whether or not to run the transient simulations.
  - `log_path` : folder where outputs will be saved (when chunksize is reached). 
+ - `ida_opts` : options for IDA integrator. Defaults are usually OK.
 
 Whenever the number of rows in `gss.df` reaches `gss.chunksize`, results will be saved to file then deleted from gss.df in order to limit total memory usage.
 
 If `gss.chunksize` is finite, the final dataframe will be saved. This way all results will be saved, even the last chunk or if `chunksize` was not reached.
-In this case, the final chunk will also be deleted from gss.df.
 
 To not save anything to file and keep the results in gss.df, make sure to `set_chunksize(gss, Inf)`.
 """
-function execute_sims!(gss::GridSearchSys, change::PSID.Perturbation; tspan::Tuple{Float64, Float64}=(0.48, 0.55), dtmax=0.0005, output_res=0.00005, run_transient::Bool=true, log_path::String="data/sims")
-    # gen_busses = collect(get_bus.(get_components(Generator, gss.base)))
-    # gen_dict = Dict(get_name.(get_components(Generator, gss.base)) .=> get_number.(gen_busses))
-    # bus_voltages = (x->"Voltage at Bus $(get_number(x))").(get_components(Bus, gss.base))
-    # inverter_currents = (x->"Inverter Current at Bus $(get_number(x))").(gen_busses)
-    # generator_speeds = (x->"Generator Speed at Bus $(get_number(x))").(gen_busses)
-    # cols = [gss.header..., "eigenvalues", "eigenvectors", bus_voltages..., inverter_currents..., generator_speeds..., "Simulation Status", "Simulation Time (ns)"]
+function execute_sims!(
+    gss::GridSearchSys, 
+    change::PSID.Perturbation; 
+    
+    tspan::Tuple{Float64, Float64}=(0.48, 0.55), 
+    dtmax=0.0005, 
+    output_res=0.00005, 
+    run_transient::Bool=true, 
+    log_path::String="sims",
+    ida_opts::Dict{Symbol, Any} = Dict(:linear_solver=>:Dense, :max_convergence_failures=>5),
+)
+
     if !isdir(log_path)
         mkdir(log_path)
     end
-    if isempty(gss.df)
-        save = true
-        gss.df = DataFrame([i=>[] for i in [gss.header..., gss.results_header...]])
-    else
-        save = false
-    end
+    
+    gss.df = DataFrame([i=>[] for i in [gss.header..., gss.results_header...]])
 
     counter = Threads.Atomic{Int}(0)
     total = length(gss)
     function inner(config::Vector{Any}, sys::System)
-        (sim, sm, time, error) = runSim(sys, change, ResidualModel, tspan, IDA(; linear_solver=:Dense, max_convergence_failures=5), dtmax, output_res, run_transient)
+        (sim, sm, time, error) = runSim(sys, change, ResidualModel, tspan, IDA(; ida_opts...), dtmax, output_res, run_transient)
         i = Threads.atomic_add!(counter, 1) + 1
         println("finished solve $i/$total in $(round(Int(time)/1e9, digits=2))s ($(round(100.0*i/total))%)")
 
@@ -389,28 +391,28 @@ function execute_sims!(gss::GridSearchSys, change::PSID.Perturbation; tspan::Tup
     end
     
     lk = ReentrantLock()
-    # if isfinite(gss.chunksize)
-        
+    
     chunk_counter = 0
     Threads.@threads for (key, val) in collect(gss.sysdict)
-        println("setup: $(key), $(val)")
-        # if !isempty(subset(gss.df, [title=>ByRow(x->x==config) for (title, config) in zip(gss.header, key)]))
-        #     i = Threads.atomic_add!(counter, 1) + 1
-        #     println("skipped solve $i/$total ($(round(100.0*i/total))%)")
-        #     println(subset(gss.df, [title=>ByRow(x->x==config) for (title, config) in zip(gss.header, key)]))
-        #     continue
-        # end
+        # key = configuration
+        # val = System builder function
+        
+        # actually run the solve
         results = inner(deepcopy(key), val())
+
+        # store the results
         lock(lk) do 
             push!(gss.df, results)
-            if save && (nrow(gss.df) >= gss.chunksize)
+            if nrow(gss.df) >= gss.chunksize
                 _save_serde_data(gss.df, log_path*"/results$(chunk_counter).jls")
                 deleteat!(gss.df, 1:nrow(gss.df))
                 chunk_counter += 1
             end
         end
     end
-    if save && isfinite(gss.chunksize) && nrow(gss.df)>0
+
+    # save final chunk if necessary
+    if isfinite(gss.chunksize) && nrow(gss.df)>0
         _save_serde_data(gss.df, log_path*"/results$(chunk_counter).jls")
         gss.df = last(gss.df, 0)
         Serialization.serialize(joinpath(log_path, ".gss"), gss)
@@ -418,13 +420,8 @@ function execute_sims!(gss::GridSearchSys, change::PSID.Perturbation; tspan::Tup
             write(file, gss.hfile)
         end
     end
-    if !save && isfinite(gss.chunksize)
-        save_serde_data(gss, log_path)
-
-        # don't delete since we know all data is in fact here
-        # deleteat!(gss.df, 1:nrow(gss.df))
-    end
 end
+
 function _save_serde_data(df::DataFrame, path::String)
     println("dirname: ", dirname(path))
     println("path: ", path)
@@ -499,7 +496,9 @@ function load_serde_data(path::String)
     )))
     # files = [joinpath(path, file) for file in readdir(path) if (file[1]!='.')&&(file[end-3:end]==".jls")]
     if ".hfile" ∈ readdir(path)
-        include(joinpath(path, ".hfile"))
+        # println(abspath(path))
+        # println(joinpath(path, ".hfile"))
+        include(joinpath(abspath(path), ".hfile"))
     end
     # println(files)
     dfs = Vector{DataFrame}(undef, length(files))
@@ -842,4 +841,3 @@ function get_permutations(iterable, k)
     n = length(iterable)
     return ([iterable[parse(Int, j, base=n)+1] for j in string(i, base=n, pad=k)] for i in 0:(n^k-1))
 end
-

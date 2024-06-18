@@ -188,7 +188,7 @@ gss = GridSearchSys(s, [sm_inj() gfl_inj() gfm_inj();
                         gfm_inj() sm_inj() sm_inj();
                         sm_inj() sm_inj() sm_inj()],
                         ["Bus1", "Bus 2", "Bus 3"]) # just make sure the busses are in the right order
-set_chunksize(gss, 200)
+set_chunksize!(gss, 200)
 
 add_generic_sweep!(gss, "Power Setpoint", set_power_setpt!, collect(0.2:0.1:1.4))
 add_lines_sweep!(gss, [line_params], line_adders)
@@ -199,4 +199,4 @@ add_result!(gss, "Eigenvalues", get_eigenvalues)
 # add_result!(gss, ["Load Voltage at $busname" for busname in get_name.(get_bus.(get_components(StandardLoad, gss.base)))], get_zipe_load_voltages)
 
 
-execute_sims!(gss, BranchTrip(0.5, ACBranch, line_params.alg_line_name), tspan=(0.48, 1.0), dtmax=0.005, output_res=0.00005, run_transient=true, log_path="data/fineresults_powersetpt")
+# execute_sims!(gss, BranchTrip(0.5, ACBranch, line_params.alg_line_name), tspan=(0.48, 1.0), dtmax=0.005, output_res=0.00005, run_transient=true, log_path="data/fineresults_powersetpt_2")

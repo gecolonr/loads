@@ -16,7 +16,7 @@ using OrderedCollections
 # pygui(true)
 include("sysbuilder.jl")
 include("plotting.jl")
-include("9bus_sims.jl") # to make sure we have all the methods for deserialization
+# include("9bus_sims.jl") # to make sure we have all the methods for deserialization
 
 ############## LOAD DATA ###############
 gss = load_serde_data("data/fineresults_powersetpt")
@@ -45,15 +45,22 @@ inj_case_names = OrderedDict(
     "GFM, GFL, SM" => "Case 3",
     "SM, SM, SM" => "Case 4"
 )
-df = gss.df
+
+
 # first we add columns for all the data we want to include in the plot
-getvec(x::LoadParams) = [x.z_percent, x.i_percent, x.p_percent, x.e_percent]
+getvec(x::LoadParams) = round.([x.z_percent, x.i_percent, x.p_percent, x.e_percent], digits=3)
+df = @subset gss.df begin
+    [i ∈ keys(η_names) for i in getvec.(:"ZIPE Load Params")]
+    [i ∈ keys(inj_case_names) for i in join.(eachrow(hcat(:"injector at {Bus1}", 
+                                                          :"injector at {Bus 2}",
+                                                          :"injector at {Bus 3}")), ", ")]
+end
 df[!, "ZIPE Parameters"] = (x->"$(η_names[round.(x, digits=3)]): $(round.(x, digits=3))").(getvec.(df."ZIPE Load Params"))
 df[!, "hovertext"] = (x->"η=$x").(getvec.(df."ZIPE Load Params"))
 df[!, "Injector Setup"] = join.(eachrow(hcat(df[!, "injector at {Bus1}"], 
                                              df[!, "injector at {Bus 2}"],
                                              df[!, "injector at {Bus 3}"])), ", ")
-df[!, "tracename"] = map(x->inj_case_names[x[1]]*", "*x[2], zip(df[!, "Injector Setup"], df[!, "Line Model"]))
+df[!, "tracename"] = map(x->inj_case_names[x[1]]*", "*x[2]*", "*string(x[3]), zip(df[!, "Injector Setup"], df[!, "Line Model"], df[!, "Power Setpoint"]))
 df[!, "Injector Setup"] = map(x->inj_case_names[x]*" ($x)", df[!, "Injector Setup"])
 df[!, "real_eigs"] = real.(df[!, "Eigenvalues"])
 df[!, "imag_eigs"] = imag.(df[!, "Eigenvalues"])
@@ -61,8 +68,10 @@ function pfactors(sm)
     pf = summary_participation_factors(sm)
     return Dict(pf.Name .=> eachrow(select(pf, Not(:Name))))
 end
+relu = x->((x+6.0)>0.0) ? (x+6.0)*5 : 0.0
 df[!, "participation_factors"] = map(sm->get(pfactors(sm), "generator-3-1 ir_cnv", missing), df.sm)
-df[!, "participation_factors"] = map(x->x isa Missing ? x : "PF: ".*string.(collect(x)), df.participation_factors)
+df[!, "markersize"] = map(x->x isa Missing ? x : relu.(log10.(collect(x))), df.participation_factors)
+df[!, "participation_factors"] = map(x->x isa Missing ? x : "PF: ".*string.(round.(relu.(log10.(collect(x))), sigdigits=3)), df.participation_factors)
 # then we plot it!
 p = makeplots(
     df;
@@ -83,8 +92,8 @@ p = makeplots(
     x_title=L"\mathrm{Time}\:\: [\mathrm{s}]",
     y_title = L"\mathrm{Current}\:\:[\mathrm{p.u.}]",
 
-    col_titles="Injector Setup",
-    row_titles="Line Model",
+    col_title_func=identity,
+    row_title_func=identity,
     supertitle="Bus 3 Injector Current",
 
     yaxis_home_range = (min=0, max=10),
@@ -102,7 +111,7 @@ p = makeplots(
 
     rows="Line Model",
     cols="Injector Setup",
-    color=:"ZIPE Parameters",
+    color="ZIPE Parameters",
     trace_names="tracename",
     hovertext="participation_factors",
 
@@ -116,15 +125,14 @@ p = makeplots(
     x_title=L"\mathrm{Time}\:\: [\mathrm{s}]",
     y_title = L"\mathrm{Volage}\:\:[\mathrm{p.u.}]",
 
-    col_titles="Injector Setup",
-    row_titles="Line Model",
+    row_title_func=identity, #"Line Model",
+    col_title_func=identity, #"Injector Setup",
     supertitle="System Eigenvalues",
 
-    # yaxis_home_range = (min=0, max=10),
     xaxis_home_range = nothing,
 
     image_export_filename = "eigenvalue_plot",
     scatterplot_args = Dict(:mode=>"markers"),
 )
 
-savehtmlplot(p, "media/eigplot_4case")
+savehtmlplot(p, "media/eigplot_4case_nowebgl")

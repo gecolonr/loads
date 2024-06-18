@@ -8,6 +8,20 @@ using OrderedCollections
 """
 Plot data from a dataframe. allows high dimensional data through a grid of subplots, trace colors, and a slider.
 
++ 2 variables for (x, y) on plot
++ 2 variables for row and column in subplot grid
++ 1 variable for trace or datapoint color/legendgroup
++ 1 variable on a slider
++ 1 variable on hovertext
++ 1 variable on trace name
++ 1 variable for trace or datapoint size/thickness
++ 1 variable for trace opacity (PlotlyJS can't vary opacity within a trace)
+------------------------------------------
+= 10 max variables
+
+In reality, you should use less. For example, it's impossible to read the opacity correctly, so you should make hovertext and opacity the same.
+Also, if you don't need that many variables, you can just leave them out. If you don't specify what to separate along subplot rows and columns, `makeplots` will just give you a single subplot.
+
 # Arguments
 ## Mandatory Arguments 
 - `df`: the DataFrame to get data from.
@@ -23,14 +37,16 @@ If you choose to get the series from the dataframe, each element of the column w
 ## Specifying which columns to use for what
  - `rows`: the column of the dataframe specifying which row of subplots this data should be on
  - `cols`: the column of the dataframe specifying which column of subplots this data should be on
- - `color`: the column of the dataframe specifying which color this trace should be.
+ - `color`: the column of the dataframe specifying which color **GROUP** this trace should be. Value of this column is the legendgroup name for this color.
+ - `opacity` (default: 1.0): the opacity of all datapoints OR the column of the dataframe specifying the opacity of each datapoint
+ - `markersize` (default: 7): the area of all markers OR the column of the dataframe specifying the area of each marker
  - `trace_names`: the column of the dataframe specifying the text name of this trace
  - `hovertext`: the column of the dataframe specifying any additional text that appears for this trace on hover
  - `slider`: the column of the dataframe specifying which slider value this trace corresponds to. See **Slider Config**
 
 ## Titles
- - `x_title`: x axis title. must be the same for every plot.
- - `y_title`: y axis title. must be the same for every plot.
+ - `x_title`: x axis title for every plot.
+ - `y_title`: y axis title for every plot.
  - `col_title_func`: function to get column title from value in column of df passed in `cols`. Default: identity
  - `row_title_func`: function to get row title from value in column of df passed in `row`. Default: identity
  - `supertitle`: Biggest title on the graph.
@@ -38,12 +54,12 @@ If you choose to get the series from the dataframe, each element of the column w
 ## Other graph options
  - `yaxis_home_range` and `xaxis_home_range` can be NamedTuple{(:min, :max), <:Tuple{Real, Real}}
  - `scatterplot_args`: Dict to be passed to PlotlyJS.scatter() with any additional user-desired args.
- - `image_export_filename`: default filename when image is exported using button on plot.
- - `colorlist`: list of colors to use. If you have more than 10 different values you want represented by color, set the `color` array.
- 
+ - `image_export_filename` (default: `"saved_plot"`): default filename when image is exported using button on plot.
+ - `colorlist` (default: 10 ok colors): list of colors to use. If you have more than 10 different values you want represented by color, set the `color` array.
+ - `use_webgl` (default: `true`): Whether to use scattergl or plain scatter.
 ## Slider Config
- - `slider_sort_func`: a function to get keys for the sort of the slider labels. For example, (x -> -x) would reverse the slider.
- - `slider_label_func`: gets slider tick label from value. defaults to `x->round(x, sigdigits=2)`
+ - `slider_sort_func` (default: `identity`): a function to get keys for the sort of the slider labels. For example, (x -> -x) would reverse the slider.
+ - `slider_label_func` (default: `x->round(x, sigdigits=2)`): gets slider tick label from value.
  - `slider_current_value_prefix`: prefix to put before the value on the slider's label. For example, "val: " would make the label "val: 0.5" or something
 """
 function makeplots(
@@ -52,6 +68,8 @@ function makeplots(
     rows::Union{AbstractString, Symbol, Nothing}=nothing,
     cols::Union{AbstractString, Symbol, Nothing}=nothing,
     color::Union{AbstractString, Symbol, Nothing}=nothing,
+    opacity::Union{AbstractString, Symbol, Real}=1.0,
+    markersize::Union{AbstractString, Symbol, Real}=7,
     trace_names::Union{AbstractString, Symbol, Nothing}=nothing,
     hovertext::Union{AbstractString, Symbol, Nothing}=nothing,
 
@@ -65,10 +83,8 @@ function makeplots(
     x_title::Union{AbstractString, Nothing} = nothing,
     y_title::Union{AbstractString, Nothing} = nothing,
 
-    # col_titles::Union{AbstractString, Symbol, Vector{AbstractString}, Nothing}=nothing,
     col_title_func::Function=identity,
     row_title_func::Function=identity,
-    # row_titles::Union{AbstractString, Symbol, Vector{AbstractString}, Nothing}=nothing,
     supertitle::Union{AbstractString, Nothing} = nothing,
 
     yaxis_home_range::Union{NamedTuple{(:min, :max), <:Tuple{Real, Real}}, Nothing} = nothing,
@@ -77,7 +93,9 @@ function makeplots(
     image_export_filename::String = "saved_plot",
     colorlist::Vector{String} = ["#1f77b4", "#ff7f0e", "#2ca02c", "#d62728", "#9467bd", "#8c564b", "#e377c2", "#7f7f7f", "#bcbd22", "#17becf"],
     scatterplot_args::Dict = Dict(),
+    use_webgl::Bool = true,
 )
+    scatterfunc = use_webgl ? PlotlyJS.scattergl : PlotlyJS.scatter
 
     if !isnothing(color) && length(unique(df[!, color]))>length(colorlist)
         AssertionError("Not enough colors to give each series a unique color. Need at least $(length(unique(df[!, color]))).")
@@ -158,20 +176,20 @@ function makeplots(
     sliderdata = []
     for (rowidx, rowval) in enumerate(isnothing(rows) ? [1] : unique(df[!, rows]))
         for (colidx, colval) in enumerate(isnothing(cols) ? [1] : unique(df[!, cols]))
-            for (coloridx, colorval) in enumerate(isnothing(color) ? [1] : unique(df[!, color]))
+            for (coloridx, colorval) in enumerate(isnothing(color) ? [1] : sort(unique(df[!, color])))
                 # data = @subset(df, Symbol(rows) .== rowval, Symbol(cols) .== colval, Symbol(color) .== colorval)
                 data = subset(df, [i=>ByRow(x->x==ival) for (i, ival) in [(rows, rowval), (cols, colval), (color, colorval)] if !isnothing(i)])
                 # println([i for i in [x, y, hovertext] if i isa Union{AbstractString, Symbol}])
-                push!(sliderdata, Dict((isnothing(slider) ? [i for i in 1:length(eachrow(data))] : data[!, slider]) .=> eachrow(select(data, [i for i in [x, y, hovertext, trace_names] if i isa Union{AbstractString, Symbol}]))))
-
+                push!(sliderdata, Dict(
+                    (isnothing(slider) ? collect(1:nrow(data)) : data[!, slider]) 
+                        .=> 
+                    eachrow(select(data, unique([i for i in [x, y, hovertext, trace_names, opacity, markersize, color] if i ∈ names(data)])))))
                 scatargs = Dict()
                 if (x isa Vector) 
-                    scatargs[:x] = x 
+                    scatargs[:x] = x
                 elseif (x isa NamedTuple) 
                     scatargs[:x0] = x.x0
                     scatargs[:dx] = x.dx
-                # elseif isnothing(slider)
-                #     scatargs[:x] = data[!, x]
                 end # if it's a column, we'll update it, so don't put it there now unless we aren't doing slider stuff
 
                 if (y isa Vector) 
@@ -179,32 +197,36 @@ function makeplots(
                 elseif (y isa NamedTuple)
                     scatargs[:y0] = y.y0
                     scatargs[:dy] = y.dy
-                # elseif isnothing(slider)
-                #     scatargs[:y] = data[!, y]
                 end
                 
-                if !isnothing(trace_names) scatargs[:name]=data[!, trace_names][1] end
-                if !isnothing(color)
+                if trace_names ∈ names(data) scatargs[:name]=data[!, trace_names][1] end
+                if hovertext ∈ names(data) scatargs[:hovertext]=data[!, hovertext][1] end
+                if opacity isa Real scatargs[:opacity] = opacity end
+                scatargs[:marker]=attr()
+                if markersize isa Real scatargs[:marker].size = markersize end
+                if color ∈ names(data) scatargs[:marker].color = colorlist[coloridx] end
+                if color ∈ names(data) 
                     scatargs[:legendgroup]=coloridx
                     scatargs[:legendgrouptitle_text]=colorval
                 end
-                if !isnothing(hovertext) scatargs[:hovertext]=data[!, hovertext][1] end
-
-                
-                scatargs[:opacity]=0.7
-                scatargs[:marker]=isnothing(color) ? attr(size=7) : attr(size=7, color=colorlist[coloridx])
-
                 if isnothing(slider)
-                    for i in values(sliderdata[end])
-                        if x isa Union{AbstractString, Symbol} scatargs[:x]=i[x] end
-                        if y isa Union{AbstractString, Symbol} scatargs[:y]=i[y] end
-                        # println(typeof(scatargs[:y]))
-                        if !isnothing(trace_names) scatargs[:name]=i[trace_names] end
-                        if !isnothing(hovertext) scatargs[:hovertext]=i[hovertext] end
-                        PlotlyJS.add_trace!(fig, PlotlyJS.scatter(; merge(scatargs, scatterplot_args)...), row=rowidx, col=colidx)
+                    for i in values(sliderdata[end]) # plot all ticks of the slider
+                        if x isa Union{AbstractString, Symbol} scatargs[:x]=i[x] end # else it's already been set
+                        if y isa Union{AbstractString, Symbol} scatargs[:y]=i[y] end # else it's already been set
+
+                        if color ∈ names(data)         scatargs[:marker].color=colorlist[coloridx] elseif !isnothing(color) scatargs[:marker].color=color end
+                        if trace_names ∈ names(data)   scatargs[:name]=i[trace_names]              elseif !isnothing(trace_names) scatargs[:name]=trace_names end
+                        if hovertext ∈ names(data)     scatargs[:hovertext]=i[hovertext]           elseif !isnothing(hovertext) scatargs[:hovertext]=hovertext end
+                        if opacity ∈ names(data)       scatargs[:opacity]=i[opacity] end
+                        if markersize ∈ names(data)    scatargs[:marker].size=i[markersize] end
+                        if color ∈ names(data) 
+                            scatargs[:legendgroup]=coloridx
+                            scatargs[:legendgrouptitle_text]=colorval
+                        end
+                        PlotlyJS.add_trace!(fig, scatterfunc(; merge(scatargs, scatterplot_args)...), row=rowidx, col=colidx)
                     end
                 else
-                    PlotlyJS.add_trace!(fig, PlotlyJS.scatter(; merge(scatargs, scatterplot_args)...), row=rowidx, col=colidx)
+                    PlotlyJS.add_trace!(fig, scatterfunc(; merge(scatargs, scatterplot_args)...), row=rowidx, col=colidx)
                 end
             end
         end
@@ -220,8 +242,22 @@ function makeplots(
         if y isa Union{AbstractString, Symbol}
             step.args[1]["y"]=[data[sliderval][y] for data in sliderdata]
         end
-        if !isnothing(trace_names) step.args[1]["name"]      = [data[sliderval][trace_names] for data in sliderdata] end
-        if !isnothing(hovertext)   step.args[1]["hovertext"] = [data[sliderval][hovertext]   for data in sliderdata] end
+
+        if !isnothing(trace_names) step.args[1]["name"]        = [get(data[sliderval], trace_names, trace_names) for data in sliderdata] end
+        if !isnothing(hovertext)   step.args[1]["hovertext"]   = [get(data[sliderval], hovertext, hovertext)     for data in sliderdata] end
+        if !(opacity isa Real)     step.args[1]["opacity"]     = [data[sliderval][opacity]                       for data in sliderdata] end
+        # if !isnothing(legendgroup) 
+        #     # println([i[sliderval][legendgroup] for i in sliderdata])
+        #     step.args[1]["legendgroup"] = [data[sliderval][legendgroup] for data in sliderdata] 
+        #     step.args[1]["legendgrouptitle_text"] = [data[sliderval][legendgroup] for data in sliderdata] 
+        # end
+        if !(markersize isa Real)
+            colordict = Dict(reverse.(enumerate(isnothing(color) ? [1] : sort(unique(df[!, color])))))
+            step.args[1]["marker"] = [attr(size=data[sliderval][markersize]) for data in sliderdata]
+            for (idx, data) in enumerate(sliderdata)
+                step.args[1]["marker"][idx].color = colorlist[colordict[data[sliderval][color]]]
+            end
+        end
     end
     return fig
 end
