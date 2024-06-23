@@ -3,7 +3,7 @@ using DataFrames
 using DataFramesMeta
 using LaTeXStrings
 using OrderedCollections
-
+using Colors
 
 """
 Plot data from a dataframe. allows high dimensional data through a grid of subplots, trace colors, and a slider.
@@ -72,12 +72,17 @@ function makeplots(
     markersize::Union{AbstractString, Symbol, Real}=7,
     trace_names::Union{AbstractString, Symbol, Nothing}=nothing,
     hovertext::Union{AbstractString, Symbol, Nothing}=nothing,
+    # showlegend::Union{AbstractString, Symbol, Nothing}=nothing,
+
+    row_sort_func::Function = identity,
+    col_sort_func::Function = identity,
+    color_sort_func::Function = identity,
+    slider_sort_func::Function = identity,
+
 
     slider::Union{AbstractString, Symbol, Nothing}=nothing,
-    slider_sort_func::Function = identity,
     slider_label_func::Function = x->round(x, sigdigits=2),
     slider_current_value_prefix::Union{AbstractString, Nothing} = nothing,
-
     x::Union{AbstractString, Symbol, NamedTuple{(:x0, :dx), <:Tuple{Real, Real}}, Vector{<:Real}}=nothing,
     y::Union{AbstractString, Symbol, NamedTuple{(:y0, :dy), <:Tuple{Real, Real}}, Vector{<:Real}}=nothing,
     x_title::Union{AbstractString, Nothing} = nothing,
@@ -91,7 +96,7 @@ function makeplots(
     xaxis_home_range::Union{NamedTuple{(:min, :max), <:Tuple{Real, Real}}, Nothing} = nothing,
 
     image_export_filename::String = "saved_plot",
-    colorlist::Vector{String} = ["#1f77b4", "#ff7f0e", "#2ca02c", "#d62728", "#9467bd", "#8c564b", "#e377c2", "#7f7f7f", "#bcbd22", "#17becf"],
+    colorlist::Union{Vector{String}, Vector{<:Colors.Colorant}} = ["#1f77b4", "#ff7f0e", "#2ca02c", "#d62728", "#9467bd", "#8c564b", "#e377c2", "#7f7f7f", "#bcbd22", "#17becf"],
     scatterplot_args::Dict = Dict(),
     use_webgl::Bool = true,
 )
@@ -102,8 +107,8 @@ function makeplots(
     end
 
     spkwargs = Dict()
-    if !isnothing(cols) spkwargs[:column_titles] = col_title_func.(unique(df[!, cols])) end
-    if !isnothing(rows) spkwargs[:row_titles] = row_title_func.(unique(df[!, rows])) end
+    if !isnothing(cols) spkwargs[:column_titles] = col_title_func.(sort(unique(df[!, cols]), by=col_sort_func)) end
+    if !isnothing(rows) spkwargs[:row_titles] = row_title_func.(sort(unique(df[!, rows]), by=row_sort_func)) end
 
     # if !isnothing(col_titles) spkwargs[:column_titles] = col_titles isa Vector ? col_titles : unique(df[!, col_titles]) end
     # if !isnothing(row_titles) spkwargs[:row_titles] = row_titles isa Vector ? row_titles : unique(df[!, row_titles]) end
@@ -174,9 +179,9 @@ function makeplots(
     
     # [(name=colorname, data=dict(sliderval=>data for each data of color)) for (colorname, color) in colors]
     sliderdata = []
-    for (rowidx, rowval) in enumerate(isnothing(rows) ? [1] : unique(df[!, rows]))
-        for (colidx, colval) in enumerate(isnothing(cols) ? [1] : unique(df[!, cols]))
-            for (coloridx, colorval) in enumerate(isnothing(color) ? [1] : sort(unique(df[!, color])))
+    for (rowidx, rowval) in enumerate(isnothing(rows) ? [1] : sort(unique(df[!, rows]), by=row_sort_func))
+        for (colidx, colval) in enumerate(isnothing(cols) ? [1] : sort(unique(df[!, cols]), by=col_sort_func))
+            for (coloridx, colorval) in enumerate(isnothing(color) ? [1] : sort(unique(df[!, color]), by=color_sort_func))
                 # data = @subset(df, Symbol(rows) .== rowval, Symbol(cols) .== colval, Symbol(color) .== colorval)
                 data = subset(df, [i=>ByRow(x->x==ival) for (i, ival) in [(rows, rowval), (cols, colval), (color, colorval)] if !isnothing(i)])
                 # println([i for i in [x, y, hovertext] if i isa Union{AbstractString, Symbol}])
@@ -236,15 +241,17 @@ function makeplots(
     end
     for (step, sliderval) in zip(fig.plot.layout[:sliders][1].steps, sort(unique(df[!, slider]), by=slider_sort_func))
         step.args = [Dict()]
+        # println(sliderdata[1])
+        # println(typeof(sliderdata[1]))
         if x isa Union{AbstractString, Symbol}
-            step.args[1]["x"]=[data[sliderval][x] for data in sliderdata]
+            step.args[1]["x"]=[round.(data[sliderval][x], sigdigits=6) for data in sliderdata]
         end
         if y isa Union{AbstractString, Symbol}
-            step.args[1]["y"]=[data[sliderval][y] for data in sliderdata]
+            step.args[1]["y"]=[round.(data[sliderval][y], sigdigits=6) for data in sliderdata]
         end
 
-        if !isnothing(trace_names) step.args[1]["name"]        = [get(data[sliderval], trace_names, trace_names) for data in sliderdata] end
-        if !isnothing(hovertext)   step.args[1]["hovertext"]   = [get(data[sliderval], hovertext, hovertext)     for data in sliderdata] end
+        # if !isnothing(trace_names) step.args[1]["name"]        = [get(data[sliderval], trace_names, trace_names) for data in sliderdata] end
+        # if !isnothing(hovertext)   step.args[1]["hovertext"]   = [get(data[sliderval], hovertext, hovertext)     for data in sliderdata] end
         if !(opacity isa Real)     step.args[1]["opacity"]     = [data[sliderval][opacity]                       for data in sliderdata] end
         # if !isnothing(legendgroup) 
         #     # println([i[sliderval][legendgroup] for i in sliderdata])
@@ -287,3 +294,4 @@ function savehtmlplot(plot, filename::String=nothing)
         PlotlyBase.to_html(io, plot)
     end
 end
+

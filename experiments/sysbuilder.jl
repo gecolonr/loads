@@ -16,6 +16,7 @@ using DataFrames
 import Logging
 using CSV
 using Serialization
+using InfrastructureSystems
 
 const PSY = PowerSystems;
 const PSID = PowerSimulationsDynamics;
@@ -125,7 +126,7 @@ end
 
 function Base.show(io::IO, gss::GridSearchSys)
     print(io, """
-    GridSearchSys
+    GridSearchSys with $(length(gss)) systems
       base: System (Busses: $(PSID.get_n_buses(gss.base)))
       header: $(string(gss.header))
       sysdict: Dict{Vector{Any}, Function} with $(length(gss.sysdict)) entries
@@ -351,7 +352,6 @@ Fully parallelized.
  - `change::Perturbation` : perturbation to apply to the system
  - `tspan::Tuple{Float64, Float64}` : time interval (in seconds) to simulate.
  - `dtmax::Float64` : max timestep for solver (make sure λh is in the feasible region for the solver)
- - `output_res::Float64` : resolution of saved timeseries results
  - `run_transient::Bool` : whether or not to run the transient simulations.
  - `log_path` : folder where outputs will be saved (when chunksize is reached). 
  - `ida_opts` : options for IDA integrator. Defaults are usually OK.
@@ -368,7 +368,6 @@ function execute_sims!(
     
     tspan::Tuple{Float64, Float64}=(0.48, 0.55), 
     dtmax=0.0005, 
-    output_res=0.00005, 
     run_transient::Bool=true, 
     log_path::String="sims",
     ida_opts::Dict{Symbol, Any} = Dict(:linear_solver=>:Dense, :max_convergence_failures=>5),
@@ -383,7 +382,7 @@ function execute_sims!(
     counter = Threads.Atomic{Int}(0)
     total = length(gss)
     function inner(config::Vector{Any}, sys::System)
-        (sim, sm, time, error) = runSim(sys, change, ResidualModel, tspan, IDA(; ida_opts...), dtmax, output_res, run_transient)
+        (sim, sm, time, error) = runSim(sys, change, ResidualModel, tspan, IDA(; ida_opts...), dtmax, run_transient)
         i = Threads.atomic_add!(counter, 1) + 1
         println("finished solve $i/$total in $(round(Int(time)/1e9, digits=2))s ($(round(100.0*i/total))%)")
 
@@ -416,7 +415,7 @@ function execute_sims!(
         _save_serde_data(gss.df, log_path*"/results$(chunk_counter).jls")
         gss.df = last(gss.df, 0)
         Serialization.serialize(joinpath(log_path, ".gss"), gss)
-        open(joinpath(path, ".hfile"), "w") do file
+        open(joinpath(log_path, ".hfile"), "w") do file
             write(file, gss.hfile)
         end
     end
@@ -721,6 +720,7 @@ function current_magnitude(res::SimulationResults, name::String)
     return sqrt.(ir.^2 .+ ii.^2)
 end
 
+
 """
 extracts generator speed time series from `res`. Time discretization is even `dtmax` (the argument you passed to [`execute_sims`](@ref), default 0.02s)
 """
@@ -769,14 +769,13 @@ end
  - `tspan`: time span for transient simulation
  - `solver`: DE solver for transient simulation
  - `dtmax`: maximum timestep for DE solver
- - `output_res`: timestep of returned time series results
  - `run_transient`: whether or not to actually perform the transient simulation
  - `log_path`: path for simulation logs.
 
 ## Returns:
  - `(Simulation, SmallSignalOutput, UInt64, String)`: the Simulation object, the small signal analysis object, the time in nanoseconds the simulation took, and the error message. All but the time might be `missing` if things failed.
 """
-function runSim(system, change=BranchTrip(0.5, ACBranch, "Bus 5-Bus 4-i_1"), model=ResidualModel, tspan=(0., 5.), solver=IDA(linear_solver=:LapackDense, max_convergence_failures=5), dtmax=0.001, output_res=0.02, run_transient=true, log_path::String=mktempdir())
+function runSim(system, change=BranchTrip(0.5, ACBranch, "Bus 5-Bus 4-i_1"), model=ResidualModel, tspan=(0., 5.), solver=IDA(linear_solver=:LapackDense, max_convergence_failures=5), dtmax=0.001, run_transient=true, log_path::String=mktempdir())
     tic = Base.time_ns()
     local sim, sm
     solve_ac_powerflow!(system)
@@ -788,6 +787,8 @@ function runSim(system, change=BranchTrip(0.5, ACBranch, "Bus 5-Bus 4-i_1"), mod
         tspan,
         change,
         disable_timer_outputs=true, # needed for multiprocessing
+        console_level=Logging.Error,
+        file_level=Logging.Error
         # initialize_simulation=false,
     )
     # println("HERE2")
@@ -803,7 +804,7 @@ function runSim(system, change=BranchTrip(0.5, ACBranch, "Bus 5-Bus 4-i_1"), mod
                 sim,
                 solver,
                 dtmax = dtmax,
-                saveat = output_res,
+                # saveat = output_res,
                 tstops = [0.5],
                 enable_progress_bar = false, # with multithreading it's meaningless anyways
             )
