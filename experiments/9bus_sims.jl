@@ -249,11 +249,12 @@ set_chunksize!(gss, 200)
 add_generic_sweep!(gss, "Power Setpoint", set_power_setpt!, collect(0.2:0.1:1.4))
 add_lines_sweep!(gss, [line_params], line_adders)
 add_zipe_sweep!(gss, missing, (x->LoadParams(x...)).(values(η_combos))) # no standard load adder. already in the system.
-
+add_result!(gss, "initial_sm", get_sm)
+add_result!(gss, "final_sm", small_signal_tripped)
 # add_result!(gss, "Eigenvalues", get_eigenvalues)
-add_result!(gss, "post_trip_sm", small_signal_tripped)
 # add_result!(gss, "Eigenvectors", get_eigenvectors)
-# add_result!(gss, ["Load Voltage at $busname" for busname in get_name.(get_bus.(get_components(StandardLoad, gss.base)))], get_zipe_load_voltages)
+add_result!(gss, "time", get_time)
+add_result!(gss, ["Load Voltage at $busname" for busname in get_name.(get_bus.(get_components(StandardLoad, gss.base)))], get_zipe_load_voltages)
 
 
-execute_sims!(gss, BranchTrip(0.5, ACBranch, line_params.alg_line_name), tspan=(0.48, 5.5), dtmax=0.01, run_transient=true, log_path="/data/reiddye/loads/fiveseconds")
+execute_sims!(gss, BranchTrip(0.5, ACBranch, line_params.alg_line_name), tspan=(0.48, 5.5), dtmax=0.05, run_transient=true, log_path="/data/reiddye/loads/fivesecondsbetter")

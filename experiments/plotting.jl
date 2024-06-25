@@ -229,6 +229,7 @@ function makeplots(
                             scatargs[:legendgrouptitle_text]=colorval
                         end
                         PlotlyJS.add_trace!(fig, scatterfunc(; merge(scatargs, scatterplot_args)...), row=rowidx, col=colidx)
+                        PlotlyJS.add_trace!(fig, hline(data["hline"]; scatargs...), row=rowidx, col=colidx)
                     end
                 else
                     PlotlyJS.add_trace!(fig, scatterfunc(; merge(scatargs, scatterplot_args)...), row=rowidx, col=colidx)
@@ -268,6 +269,20 @@ function makeplots(
     end
     return fig
 end
+
+# function to_plottable!(df::DataFrame, cols_to_expand::Vector{String})
+#     df2 = first(df, 0)
+#     for (idx, row) in enumerate(eachrow(df))
+#         len = maximum([length(row[Symbol(col)]) for col in cols_to_expand])
+#         for i in 1:len
+#             push!(df2, [string(k) in cols_to_expand ? get(row[k], i, nothing) : row[k]
+#                 for k in keys(row)], promote=true)
+#         end
+#         print("\rrow $(idx)/$(nrow(df)) complete")
+#     end
+#     return df2
+# end
+
 
 """
 utility to save `plot` to `filename`.html

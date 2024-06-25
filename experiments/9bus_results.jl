@@ -13,7 +13,11 @@ using DataFramesMeta
 using LaTeXStrings
 using OrderedCollections
 using Colors
-
+using PyCall
+# using Pandas
+using CategoricalArrays
+# px = pyimport("plotly.express")
+# pd = pyimport("pandas")
 # pygui(true)
 include("sysbuilder.jl")
 include("plotting.jl")
@@ -58,6 +62,7 @@ add_result!(gss, ["Final Load Voltage at $busname" for busname in get_name.(get_
     [0.15, 0.15, 0.55, 0.15] => "High P Low E Load",
     [1.0, 0.0, 0.0, 0.0]     => "Constant Impedance",
 )
+getvec(x::LoadParams) = round.([x.z_percent, x.i_percent, x.p_percent, x.e_percent], digits=3)
 η_names = Dict(
     unique(getvec.(gss.df."ZIPE Load Params")) .=> ["η","η","η","η","η","η","η","η","η","η","η","η","η","η","η","η","η","η","η","η","η"]
 )
@@ -71,7 +76,6 @@ inj_case_names = OrderedDict(
 )
 
 # first we add columns for all the data we want to include in the plot
-getvec(x::LoadParams) = round.([x.z_percent, x.i_percent, x.p_percent, x.e_percent], digits=3)
 df = @subset gss.df begin
     [i ∈ keys(η_names) for i in getvec.(:"ZIPE Load Params")]
     [i ∈ keys(inj_case_names) for i in join.(eachrow(hcat(:"injector at {Bus1}", 
@@ -87,7 +91,38 @@ df[!, "tracename"] = map(x->inj_case_names[x[1]]*", "*x[2], zip(df[!, "Injector 
 df[!, "Injector Setup"] = map(x->inj_case_names[x]*" ($x)", df[!, "Injector Setup"])
 df[!, "real_eigs"] = real.(df[!, "Eigenvalues"])
 df[!, "imag_eigs"] = imag.(df[!, "Eigenvalues"])
-df[!, "op_pt"] = 
+
+
+df_plotable=to_plottable!(select(df, 
+["Power Setpoint", "ZIPE Parameters", "Injector Setup", "Line Model", "real_eigs", "imag_eigs", "Load Voltage at Bus 5", "Final Load Voltage at Bus 5"]), 
+["real_eigs", "imag_eigs", "Load Voltage at Bus 5"])
+
+# select(df, ["Power Setpoint", "ZIPE Parameters", "Injector Setup", "Line Model", "real_eigs", "imag_eigs"])
+
+p = PlotlyJS.plot(
+    subset(select(df_plotable, ["Power Setpoint", "ZIPE Parameters", "Injector Setup", "Line Model", "real_eigs", "imag_eigs"]), ["real_eigs"=>ByRow(x->!isnothing(x))]), 
+    x=:real_eigs,
+    y=:imag_eigs,
+    color=Symbol("ZIPE Parameters"),
+    facet_col=Symbol("Injector Setup"),
+    facet_row=Symbol("Line Model"),
+    animation_frame=Symbol("Power Setpoint"),
+    mode="markers",
+    hover_name=Symbol("hovertext"),
+)
+df_plotable[!, "Injector Setup"] .= categorical(df_plotable[!, "Injector Setup"])
+df_plotable[!, "Line Model"] .= categorical(df_plotable[!, "Line Model"])
+df_plotable[!, "Power Setpoint"] .= categorical(df_plotable[!, "Power Setpoint"])
+df_plotable[!, "ZIPE Parameters"] .= categorical(df_plotable[!, "ZIPE Parameters"])
+df_plotable[!, "real_eigs"] .= Vector{Float64}(map(x->isnothing(x) ? missing : x, df_plotable[!, "real_eigs"]))
+# df_jlpandas = Pandas.DataFrame(select(df_plotable, Not(["real_eigs", "imag_eigs"])))
+# df_pd = pd.DataFrame(df_jlpandas)
+# fig = px.scatter(df_plotable, x="real_eigs", y="imag_eigs", animation_frame="Power Setpoint", #animation_group="country",
+#            color="ZIPE Parameters", hover_name="hovertext")
+# fig["layout"].pop("updatemenus") # optional, drop animation buttons
+# fig.show()
+
+
 function pfactors(sm)
     pf = summary_participation_factors(sm)
     return Dict(pf.Name .=> eachrow(select(pf, Not(:Name))))
@@ -260,6 +295,8 @@ colordict = OrderedDict(sort(unique(df[!, "z_percent"])) .=> colors)
 df[!, Symbol("markershape")] = (x->x≈0.0 ? "square" : "circle").(df[!, "e_percent"])
 df[!, "markercolor"] = [colordict[i] for i in df[!, "z_percent"]]
 df[!, "Max Real Eigenvalue"]=[first(i) for i in df[!, "Max Real Eigenvalue"]]
+
+
 p = PlotlyJS.plot(
 
     df,

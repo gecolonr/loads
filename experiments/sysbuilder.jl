@@ -28,6 +28,8 @@ function withName(injector::DynamicInjection, name::String)
     return newinjector
 end
 
+
+
 """
 makes all configurations of the given system and injectors, or specific given configurations.
 
@@ -230,9 +232,9 @@ function GridSearchSys(sys::System, injectors::Union{AbstractArray{DynamicInject
     end
     header = (x->"injector at {$x}").(header)
     gss = GridSearchSys(sys, header, newsysdict, Vector(), Vector(), DataFrame(), Inf, "")
-    add_result!(gss, "error", get_error)
-    add_result!(gss, "sim", get_sim)
-    add_result!(gss, "sm", get_sm)
+    # add_result!(gss, "error", get_error)
+    # add_result!(gss, "sim", get_sim)
+    # add_result!(gss, "sm", get_sm)
     return gss
 end
 
@@ -343,6 +345,7 @@ function size(gss::GridSearchSys)
     return (length(gss.sysdict), length(gss.header))
 end
 
+
 """
 run simulations on all of the systems in the gridsearch and store the results in a DataFrame.
 Fully parallelized.
@@ -372,6 +375,7 @@ function execute_sims!(
     log_path::String="sims",
     ida_opts::Dict{Symbol, Any} = Dict(:linear_solver=>:Dense, :max_convergence_failures=>5),
 )
+    start = time()
 
     if !isdir(log_path)
         mkdir(log_path)
@@ -382,15 +386,14 @@ function execute_sims!(
     counter = Threads.Atomic{Int}(0)
     total = length(gss)
     function inner(config::Vector{Any}, sys::System)
-        (sim, sm, time, error) = runSim(sys, change, ResidualModel, tspan, IDA(; ida_opts...), dtmax, run_transient)
+        (sim, sm, dt, error) = runSim(sys, change, ResidualModel, tspan, IDA(; ida_opts...), dtmax, run_transient)
         i = Threads.atomic_add!(counter, 1) + 1
-        println("finished solve $i/$total in $(round(Int(time)/1e9, digits=2))s ($(round(100.0*i/total))%)")
-
-        return vcat(config, reduce(vcat, (getter(gss, sim, sm, error) for getter in gss.results_getters)))
+        results = vcat(config, reduce(vcat, (getter(gss, sim, sm, error) for getter in gss.results_getters)))
+        println("finished solve $i/$total in $(round(Int(dt)/1e9, digits=2))s ($(round(100.0*i/total))%) (runtime: $(round(time()-start))s)")
+        return results
     end
-    
-    lk = ReentrantLock()
-    
+
+    lk = Threads.ReentrantLock()
     chunk_counter = 0
     Threads.@threads for (key, val) in collect(gss.sysdict)
         # key = configuration
@@ -399,8 +402,7 @@ function execute_sims!(
         # actually run the solve
         results = inner(deepcopy(key), val())
 
-        # store the results
-        lock(lk) do 
+        lock(lk) do
             push!(gss.df, results)
             if nrow(gss.df) >= gss.chunksize
                 _save_serde_data(gss.df, log_path*"/results$(chunk_counter).jls")
@@ -664,6 +666,17 @@ function get_zipe_load_voltages(gss::GridSearchSys, sim::Union{Simulation, Missi
     return [get_voltage_magnitude_series(sim.results, i)[2] for i in get_number.(get_bus.(get_components(StandardLoad, gss.base)))]
 end
 
+"""
+[This is a results getter function]
+
+Gets the timestamps for transient results. 
+"""
+function get_time(gss::GridSearchSys, sim::Union{Simulation, Missing}, _sm::Union{PSID.SmallSignalOutput, Missing}, _error::Union{String, Missing})
+    if sim isa Missing
+        return [missing]
+    end
+    return [get_voltage_magnitude_series(sim.results, get_number(get_bus(first(get_components(StandardLoad, gss.base)))))[1]]
+end
 """
 [This is a results getter function]
 
