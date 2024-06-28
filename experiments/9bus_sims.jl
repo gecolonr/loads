@@ -13,10 +13,7 @@ using CSV
 using DataFramesMeta
 using LaTeXStrings
 using Logging
-Logging.disable_logging(Logging.Error)
-# using PyPlot
-# const plt = PyPlot
-# pygui(true)
+# Logging.disable_logging(Logging.Error)
 
 include("sysbuilder.jl")
 include("../data/build_scripts/device_models.jl")
@@ -97,9 +94,10 @@ line_params = LineModelParams(
     1.0,
     1.0
 )
-function no_change(sys::System, params::LineModelParams)
-    return sys
-end
+
+# currently unused
+function no_change(sys::System, params::LineModelParams) return sys end
+# currently unused
 function create_simple_dynpi(sys::System, params::LineModelParams)
     for ll in get_components(Line, sys)
         if (ll.name != "Bus 5-Bus 4-i_1")
@@ -109,11 +107,13 @@ function create_simple_dynpi(sys::System, params::LineModelParams)
     end
     return sys
 end
+
+# add more line models if you want. adds more runtime.
 line_adders = Dict{String, Function}([
-    "statpi (dommel)"=>create_statpi_system,
-    "dynpi (dommel)"=>create_dynpi_system,
-    "statpi (default)"=>no_change,
-    "dynpi (default)"=>create_simple_dynpi,
+    "statpi"=>create_statpi_system,
+    "dynpi"=>create_dynpi_system,
+    # "statpi (default)"=>no_change,
+    # "dynpi (default)"=>create_simple_dynpi,
     # "MSSB"=>create_MSSB_system,
 ])
 
@@ -151,44 +151,39 @@ zipe_combos = [
     [0.1, 0.1, 0.1, 0.7],
     [0.0, 0.0, 0.0, 1.0],
 ]
-η_combos = Dict(
-    "Constant Impedance" => [1.0, 0.0, 0.0, 0.0],
-    "Constant Power"     => [0.0, 0.0, 1.0, 0.0],
-    "Full E Load"        => [0.0, 0.0, 0.0, 1.0],
-    "High E Load"        => [0.1, 0.1, 0.1, 0.7],
-    "Medium E Load"      => [0.2, 0.2, 0.2, 0.4],
-    "Low E Load"         => [0.3, 0.3, 0.3, 0.1],
-    "Low P High E Load"  => [0.15, 0.15, 0.15, 0.55],
-    "Low P Low E Load"   => [0.15, 0.15, 0.55, 0.15],
 
-    "ZI-0PE" => [0.5, 0.5, 0.0, 0.0],
-    "ZI-0.1P" => [0.45, 0.45, 0.1, 0.0],
-    "ZI-0.1E" => [0.45, 0.45, 0.0, 0.1],
-    "ZI-0.2P" => [0.4, 0.4, 0.2, 0.0],
-    "ZI-0.2E" => [0.4, 0.4, 0.0, 0.2],
-    "ZI-0.3P" => [0.35, 0.35, 0.3, 0.0],
-    "ZI-0.3E" => [0.35, 0.35, 0.0, 0.3],
-    "ZI-0.4P" => [0.3, 0.3, 0.4, 0.0],
-    "ZI-0.4E" => [0.3, 0.3, 0.0, 0.4],
-    "ZI-0.5P" => [0.25, 0.25, 0.5, 0.0],
-    "ZI-0.5E" => [0.25, 0.25, 0.0, 0.5],
-    "ZI-0.6P" => [0.2, 0.2, 0.6, 0.0],
-    "ZI-0.6E" => [0.2, 0.2, 0.0, 0.6],
-    "ZI-0.7P" => [0.15, 0.15, 0.7, 0.0],
-    "ZI-0.7E" => [0.15, 0.15, 0.0, 0.7],
-    "ZI-0.8P" => [0.1, 0.1, 0.8, 0.0],
-    "ZI-0.8E" => [0.1, 0.1, 0.0, 0.8],
-    "ZI-0.9P" => [0.05, 0.05, 0.9, 0.0],
-    "ZI-0.9E" => [0.05, 0.05, 0.0, 0.9],
-    # "ZI-1.0E" => [0.0, 0.0, 1.0, 0.0],
-    # "ZI-1.0E" => [0.0, 0.0, 0.0, 1.0]
-)
+# add whatever you want here. 
+# currenlt set is for plots in paper and will work with
+# `make_plots_from_paper`. For `make_plots_more_data`,
+# use everything except the first four.
+# 
+# If you plan to make your own plots, you can do whatever
+# you like
+η_combos = [
+    [1.0, 0.0, 0.0, 0.0],
 
-# η_combos = vcat((x->[round.([(1-x)/2, (1-x)/2, x, 0], digits=3), 
-#                      round.([(1-x)/2, (1-x)/2, 0, x], digits=3)]).(0:0.1:1)...)
-
-# η_combos = [round.([0.1, 0.1, x, 0.8-x], digits=3) for x in (0:0.1:0.8)]
-# η_combos = [round.([0.2, 0.2, x, 0.6-x], digits=3) for x in (0:0.1:0.8)]
+    [0.5, 0.5, 0.0, 0.0],
+    # [0.45, 0.45, 0.1, 0.0],
+    # [0.45, 0.45, 0.0, 0.1],
+    [0.4, 0.4, 0.2, 0.0],
+    [0.4, 0.4, 0.0, 0.2],
+    # [0.35, 0.35, 0.3, 0.0],
+    # [0.35, 0.35, 0.0, 0.3],
+    [0.3, 0.3, 0.4, 0.0],
+    [0.3, 0.3, 0.0, 0.4],
+    # [0.25, 0.25, 0.5, 0.0],
+    # [0.25, 0.25, 0.0, 0.5],
+    [0.2, 0.2, 0.6, 0.0],
+    [0.2, 0.2, 0.0, 0.6],
+    # [0.15, 0.15, 0.7, 0.0],
+    # [0.15, 0.15, 0.0, 0.7],
+    [0.1, 0.1, 0.8, 0.0],
+    [0.1, 0.1, 0.0, 0.8],
+    # [0.05, 0.05, 0.9, 0.0],
+    # [0.05, 0.05, 0.0, 0.9],
+    [0.0, 0.0, 1.0, 0.0],
+    [0.0, 0.0, 0.0, 1.0]
+]
 
 ##################################################################
 ###################### POWER SETPOINT ############################
@@ -204,7 +199,6 @@ function set_power_setpt!(sys::System, scale::Real)
         set_current_reactive_power!(load, get_current_reactive_power(load)*scale)
         set_constant_reactive_power!(load, get_constant_reactive_power(load)*scale)
     end
-    # if scale <= 1.0 return sys end
     for gen in get_components(Generator, sys)
         if gen.bus.bustype == ACBusTypes.PV
             # set_base_power!(g, g.base_power * p.load_scale)
@@ -219,11 +213,14 @@ end
 ################### RUNNING ALL OF IT ############################
 ##################################################################
 
-# get all combinations of generators on this system
-# gss = GridSearchSys(s, [gfl_inj(), gfm_inj(), sm_inj()])
+#* For more information on how the `GridSearchSys` struct works, See
+#* the [guide](https://reid.xz.ax/loads/gsstutorial). The docstrings
+#* are helpful too.
 
 """
-function to get small signal analysis 
+function to get small signal analysis after the branch trip.
+
+Not currently used.
 """
 function small_signal_tripped(gss::GridSearchSys, sim::Union{Simulation, Missing}, sm::Union{PSID.SmallSignalOutput, Missing}, error::Union{String, Missing})
     if isnothing(sim) return missing end
@@ -234,27 +231,29 @@ function small_signal_tripped(gss::GridSearchSys, sim::Union{Simulation, Missing
     return sm
 end
 
-
-gss = GridSearchSys(s, [sm_inj() gfl_inj() gfm_inj(); 
+# enable or add more cases here if you want. The second line is the case from the paper.
+gss = GridSearchSys(s, [#sm_inj() gfl_inj() gfm_inj(); 
                         sm_inj() gfm_inj() gfl_inj(); 
-                        gfm_inj() gfl_inj() sm_inj();
-                        gfm_inj() gfm_inj() sm_inj();
-                        gfm_inj() sm_inj() sm_inj();
-                        sm_inj() sm_inj() sm_inj();
-                        gfm_inj() gfm_inj() gfl_inj();
-                        gfm_inj() gfl_inj() gfm_inj();],
+                        # gfm_inj() gfl_inj() sm_inj();
+                        # gfm_inj() gfm_inj() sm_inj();
+                        # gfm_inj() sm_inj() sm_inj();
+                        # sm_inj() sm_inj() sm_inj();
+                        # gfm_inj() gfm_inj() gfl_inj();
+                        # gfm_inj() gfl_inj() gfm_inj();
+                        ],
                         ["Bus1", "Bus 2", "Bus 3"]) # just make sure the busses are in the right order
 set_chunksize!(gss, 200)
 
-add_generic_sweep!(gss, "Power Setpoint", set_power_setpt!, collect(0.2:0.1:1.4))
+# we swept power setpoint with steps of 0.1 and 0.2. Your choice. 0.1
+# will double the data size but it makes the slider on the plots smoother.
+add_generic_sweep!(gss, "Power Setpoint", set_power_setpt!, collect(0.2:0.2:1.0))
 add_lines_sweep!(gss, [line_params], line_adders)
-add_zipe_sweep!(gss, missing, (x->LoadParams(x...)).(values(η_combos))) # no standard load adder. already in the system.
-add_result!(gss, "initial_sm", get_sm)
-add_result!(gss, "final_sm", small_signal_tripped)
-# add_result!(gss, "Eigenvalues", get_eigenvalues)
-# add_result!(gss, "Eigenvectors", get_eigenvectors)
+add_generic_sweep!(gss, "ZIPE Load Params", TLModels.create_ZIPE_load, (x->LoadParams(x...)).(η_combos))
+
+add_result!(gss, "Eigenvalues", get_eigenvalues)
+add_result!(gss, ["Bus 3 Injector Current", "Bus 1 Injector Current", "Bus 2 Injector Current"], get_injector_currents)
 add_result!(gss, "time", get_time)
-add_result!(gss, ["Load Voltage at $busname" for busname in get_name.(get_bus.(get_components(StandardLoad, gss.base)))], get_zipe_load_voltages)
+# add_result!(gss, ["Load Voltage at $busname" for busname in get_name.(get_bus.(get_components(StandardLoad, gss.base)))], get_zipe_load_voltages)
 
 
-execute_sims!(gss, BranchTrip(0.5, ACBranch, line_params.alg_line_name), tspan=(0.48, 5.5), dtmax=0.05, run_transient=true, log_path="/data/reiddye/loads/fivesecondsbetter")
+execute_sims!(gss, BranchTrip(0.5, ACBranch, line_params.alg_line_name), tspan=(0.48, 1.0), dtmax=0.05, run_transient=true, log_path="/data/reiddye/loads/forplot")

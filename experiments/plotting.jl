@@ -69,7 +69,7 @@ function makeplots(
     cols::Union{AbstractString, Symbol, Nothing}=nothing,
     color::Union{AbstractString, Symbol, Nothing}=nothing,
     opacity::Union{AbstractString, Symbol, Real}=1.0,
-    markersize::Union{AbstractString, Symbol, Real}=7,
+    markersize::Union{AbstractString, Symbol, Real}=8,
     trace_names::Union{AbstractString, Symbol, Nothing}=nothing,
     hovertext::Union{AbstractString, Symbol, Nothing}=nothing,
     # showlegend::Union{AbstractString, Symbol, Nothing}=nothing,
@@ -126,7 +126,13 @@ function makeplots(
     )
 
     layout_kwargs = Dict()
-    if !isnothing(supertitle) layout_kwargs[:title_text] = supertitle end
+    layout_kwargs[:font]=attr(
+        family="Computer Modern",
+        # size=16,
+    )
+    if !isnothing(supertitle) 
+        layout_kwargs[:title_text] = supertitle 
+    end
     if !isnothing(xaxis_home_range) layout_kwargs[:xaxis_range] = [xaxis_home_range.min, xaxis_home_range.max] end
     if !isnothing(yaxis_home_range) layout_kwargs[:yaxis_range] = [yaxis_home_range.min, yaxis_home_range.max] end
 
@@ -160,11 +166,12 @@ function makeplots(
         toImageButtonOptions=attr(
             format="svg", # one of png, svg, jpeg, webp
             filename=image_export_filename,
-            height=900,
-            width=1600,
+            height=1800,
+            width=3200,
             scale=1
         ).fields,
         displayModeBar=true,
+        # queuelength=5,
     ))
 
     layoutkeys = keys(fig.plot.layout)
@@ -189,6 +196,7 @@ function makeplots(
                     (isnothing(slider) ? collect(1:nrow(data)) : data[!, slider]) 
                         .=> 
                     eachrow(select(data, unique([i for i in [x, y, hovertext, trace_names, opacity, markersize, color] if i ∈ names(data)])))))
+                # push!(sliderdata, merge(Dict(["hline"=>"hline"]), Dict(data[!, slider] .=> data[!, "hline"])))
                 scatargs = Dict()
                 if (x isa Vector) 
                     scatargs[:x] = x
@@ -229,7 +237,6 @@ function makeplots(
                             scatargs[:legendgrouptitle_text]=colorval
                         end
                         PlotlyJS.add_trace!(fig, scatterfunc(; merge(scatargs, scatterplot_args)...), row=rowidx, col=colidx)
-                        PlotlyJS.add_trace!(fig, hline(data["hline"]; scatargs...), row=rowidx, col=colidx)
                     end
                 else
                     PlotlyJS.add_trace!(fig, scatterfunc(; merge(scatargs, scatterplot_args)...), row=rowidx, col=colidx)

@@ -232,9 +232,9 @@ function GridSearchSys(sys::System, injectors::Union{AbstractArray{DynamicInject
     end
     header = (x->"injector at {$x}").(header)
     gss = GridSearchSys(sys, header, newsysdict, Vector(), Vector(), DataFrame(), Inf, "")
-    # add_result!(gss, "error", get_error)
-    # add_result!(gss, "sim", get_sim)
-    # add_result!(gss, "sm", get_sm)
+    add_result!(gss, "error", get_error)
+    add_result!(gss, "sim", get_sim)
+    add_result!(gss, "sm", get_sm)
     return gss
 end
 

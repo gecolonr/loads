@@ -5,3 +5,4 @@ saved_objects/
 saved_objects.zip
 *.tsv
 *.jls
+*.pkl
