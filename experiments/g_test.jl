@@ -126,6 +126,18 @@ function set_power_setpt!(sys::System, scale::Real)
     return sys
 end
 
+### Defining a function to scale the line impedance
+function scale_line_impedance!(sys::System, scale::Real)
+    for line in get_components(Line, sys)
+        if line.name == "Bus 5-Bus 4-i_1" || line.name == "Bus 6-Bus 4-i_1"
+            line.r = line.r * scale
+            line.x = line.x * scale
+        end
+    end
+    return sys
+end
+
+
 function small_signal_tripped(gss::GridSearchSys, sim::Union{Simulation, Missing}, sm::Union{PSID.SmallSignalOutput, Missing}, error::Union{String, Missing})
     if isnothing(sim) return missing end
     sys = deepcopy(sim.sys)
@@ -140,6 +152,7 @@ gss = GridSearchSys(s, [sm_inj() gfl_inj() gfm_inj(); ],
 set_chunksize!(gss, 200)
 
 add_generic_sweep!(gss, "Power Setpoint", set_power_setpt!, collect(0.2:0.1:1.4))
+add_generic_sweep!(gss, "Line impedance increase", scale_line_impedance!, collect(1.0:0.1:10.0))
 add_lines_sweep!(gss, [line_params], line_adders)
 add_zipe_sweep!(gss, missing, (x->LoadParams(x...)).(values(η_combos))) # no standard load adder. already in the system.
 add_result!(gss, "initial_sm", get_sm)
