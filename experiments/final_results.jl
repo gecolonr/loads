@@ -18,8 +18,10 @@ include("plotting.jl")
 
 getvec(x::LoadParams) = round.([x.z_percent, x.i_percent, x.p_percent, x.e_percent], digits=3)
 
-function make_plots_from_paper(;save_to_html=true)
-    gss = load_serde_data("data/forplot")
+function make_plots_from_paper(;save_to_html=true, gss=nothing)
+    if isnothing(gss)
+        gss = load_serde_data("data/forplot")
+    end
     map!(getvec, gss.df[!, "ZIPE Load Params"], gss.df[!, "ZIPE Load Params"])
     gss.df[!, "hovertext"] = map(x->"η=$x", gss.df[!, "ZIPE Load Params"])
     gss.df[!, "real_eigs"] = map(real, gss.df[!, "Eigenvalues"])
@@ -42,7 +44,7 @@ function make_plots_from_paper(;save_to_html=true)
     end
     gss.df[!, "pfactors"] = map(pfactors, gss.df[!, "sm"])
     gss.df[!, "hovertext_eig"] = reduce.(.*, eachrow(gss.df[!, ["hovertext", "pfactors"]]))
-
+    gss.df[!, "colorbar"] = map(x->(x[4]-x[3]), gss.df[!, "ZIPE Load Params"])
     eigplot_slider = makeplots(
         gss.df;
         rows="Line Model",
@@ -83,6 +85,7 @@ function make_plots_from_paper(;save_to_html=true)
         @subset gss.df :"Power Setpoint" .≈ 0.2;
         rows="Line Model",
         color="hovertext", # ZIPE Load Params
+        colorbar="colorbar",
         trace_names="Line Model",
         hovertext="hovertext_eig",
 
@@ -110,7 +113,7 @@ function make_plots_from_paper(;save_to_html=true)
 
         image_export_filename="eigenvalue_plot",
         scatterplot_args=Dict(:mode=>"markers"),
-        colorlist=reverse(vcat("#00FF00", "#" .* hex.(range(colorant"red", colorant"blue", length=11)))),
+        # colorlist=reverse(vcat("#00FF00", "#" .* hex.(range(colorant"red", colorant"blue", length=11)))),
     )
     transient_plot_slider = makeplots(
         gss.df;
