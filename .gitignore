@@ -6,3 +6,5 @@ saved_objects.zip
 *.tsv
 *.jls
 *.pkl
+Manifestbackup.toml
+Projectbackup.toml
