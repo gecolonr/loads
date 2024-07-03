@@ -127,7 +127,7 @@ function makeplots(
     xaxis_home_range::Union{NamedTuple{(:min, :max), <:Tuple{Real, Real}}, Nothing} = nothing,
 
     image_export_filename::String = "saved_plot",
-    image_export_size::@NamedTuple{height::Integer, width::Integer}=(height=1200, width=1200),
+    image_export_size::@NamedTuple{height::Int64, width::Int64}=(height=1200, width=1200),
     colorlist::Union{Vector{String}, Vector{<:Colors.Colorant}} = Colors.distinguishable_colors(10),
     symbollist::Vector{<:AbstractString} = ["circle", "square", "diamond", "cross", "triangle-up", "star", "circle-cross", "y-up", "circle-open", "square-open", "diamond-open", "cross-open", "triangle-up-open", "star-open"],
     colorbar_args::Dict = Dict(attr(autocolorscale=true, colorbar=attr(outlinecolor=colorant"black", outlinewidth=1))),
@@ -378,7 +378,7 @@ function makeplots(
         if scattertext ∈ names(df) scatargs[:text] = trace[scattertext] end
 
         if markershape ∈ names(df) scatargs[:marker].symbol = to_marker(trace[markershape]) end
-        println(scatargs[:marker])
+        # println(scatargs[:marker])
         PlotlyJS.add_trace!(fig, scatterfunc(; scatargs...), 
             row = if (rows in names(df)) to_row_idx(trace[rows]) else 1 end, 
             col = if (cols in names(df)) to_col_idx(trace[cols]) else 1 end,
@@ -398,8 +398,8 @@ function makeplots(
         args = step.args[1]
         getcol = colname->[first(data[data[!, slider].==sliderval, :][!, colname]) for data in sliderdata]
         # return getcol(x)
-        if col_updates_on_slider(x)           args["x"] = getcol(x); println("reached x") end
-        if col_updates_on_slider(y)           args["y"] = getcol(y); println("reached y") end
+        if col_updates_on_slider(x)           args["x"] = map(z->round.(z, sigdigits=6), getcol(x)); println("reached x") end
+        if col_updates_on_slider(y)           args["y"] = map(z->round.(z, sigdigits=6), getcol(y)); println("reached y") end
         if col_updates_on_slider(legendgroup) args["legendgroup"] = getcol(legendgroup); println("reached legendgroup") end
         if col_updates_on_slider(legendgroup) args["legendgrouptitle_text"] = getcol(legendgroup); println("reached legendgroup") end
         if col_updates_on_slider(markershape) args["marker.symbol"] = to_marker.(getcol(markershape)); println("reached markershape") end

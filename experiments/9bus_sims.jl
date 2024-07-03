@@ -13,7 +13,7 @@ using CSV
 using DataFramesMeta
 using LaTeXStrings
 using Logging
-# Logging.disable_logging(Logging.Error)
+Logging.disable_logging(Logging.Error)
 
 include("sysbuilder.jl")
 include("../data/build_scripts/device_models.jl")
@@ -246,9 +246,10 @@ set_chunksize!(gss, 200)
 
 # we swept power setpoint with steps of 0.1 and 0.2. Your choice. 0.1
 # will double the data size but it makes the slider on the plots smoother.
-add_generic_sweep!(gss, "Power Setpoint", set_power_setpt!, collect(0.2:0.2:1.0))
+add_generic_sweep!(gss, "Power Setpoint", set_power_setpt!, collect(0.05:0.05:1.0))
 add_lines_sweep!(gss, [line_params], line_adders)
-add_generic_sweep!(gss, "ZIPE Load Params", TLModels.create_ZIPE_load, (x->LoadParams(x...)).(η_combos))
+add_zipe_sweep!(gss, missing, (x->LoadParams(x...)).(η_combos))
+# add_generic_sweep!(gss, "ZIPE Load Params", create_ZIPE_load, (x->LoadParams(x...)).(η_combos))
 
 add_result!(gss, "Eigenvalues", get_eigenvalues)
 add_result!(gss, ["Bus 3 Injector Current", "Bus 1 Injector Current", "Bus 2 Injector Current"], get_injector_currents)
@@ -256,4 +257,4 @@ add_result!(gss, "time", get_time)
 # add_result!(gss, ["Load Voltage at $busname" for busname in get_name.(get_bus.(get_components(StandardLoad, gss.base)))], get_zipe_load_voltages)
 
 
-execute_sims!(gss, BranchTrip(0.5, ACBranch, line_params.alg_line_name), tspan=(0.48, 1.0), dtmax=0.05, run_transient=true, log_path="/data/reiddye/loads/forplot")
+execute_sims!(gss, BranchTrip(0.5, ACBranch, line_params.alg_line_name), tspan=(0.48, 1.0), dtmax=0.05, run_transient=true, log_path="/data/reiddye/loads/forplot_fine")
