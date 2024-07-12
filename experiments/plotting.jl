@@ -77,6 +77,7 @@ If you choose to get the series from the dataframe, each element of the column w
  - `symbollist` (default: 14 different symbols): list of symbols to use for the different values of `markershape`. If you have more than 14 different values, set this array.
  - `use_webgl` (default: `true`): Whether to use scattergl or plain scatter.
  - `colorbar_args`: Dictionary of parameters for the colorbar. See Julia PlotlyJS docs for Layout.coloraxis.
+ - `shared_xaxes`, `shared_yaxes`: how to share axes. see `Subplots`.
 
 
 ## Slider Config
@@ -101,6 +102,8 @@ function makeplots(
     scattertext::Union{AbstractString, Symbol, Nothing}=nothing,
     
     colorbar::Bool=false,
+    map_to_colorbar::Bool=true,
+    marker_line_width::Union{Real, Nothing} = nothing,
 
     slider_trace_id::Union{AbstractString, Symbol, Nothing}=nothing,
 
@@ -131,10 +134,16 @@ function makeplots(
     colorlist::Union{Vector{String}, Vector{<:Colors.Colorant}} = Colors.distinguishable_colors(10),
     symbollist::Vector{<:AbstractString} = ["circle", "square", "diamond", "cross", "triangle-up", "star", "circle-cross", "y-up", "circle-open", "square-open", "diamond-open", "cross-open", "triangle-up-open", "star-open"],
     colorbar_args::Dict = Dict(attr(autocolorscale=true, colorbar=attr(outlinecolor=colorant"black", outlinewidth=1))),
-    use_webgl::Bool = true,
+    use_webgl::Bool = false,
     hide_legend_duplicates::Bool = true,
     legend_location::@NamedTuple{x::Float64, y::Float64} = (x=0.9, y=0.9),
-    legend_visible::Bool=true,)
+    legend_visible::Bool=true,
+    shared_xaxes::Union{String, Bool}="all",
+    shared_yaxes::Union{String, Bool}="all",
+    fontsize::Real=18,
+    offsets::NamedTuple{(:xtitle, :ytitle, :coltitle, :rowtitle), <:Tuple{Real, Real, Real, Real}} = (xtitle = -0.03, ytitle=-0.05, coltitle=0.01, rowtitle=0.01),
+    subplotgaps::NamedTuple{(:horizontal_spacing, :vertical_spacing), <:Tuple{Real, Real}}=(horizontal_spacing=0.1, vertical_spacing=0.06),
+    )
 
     to_col_idx(c) = 1
     to_row_idx(r) = 1
@@ -150,7 +159,7 @@ function makeplots(
     to_color = identity
     to_marker = identity
     if color ∈ names(df)
-        if colorbar==false
+        if occursin("lines", scattermode) || colorbar==false
             if eltype(df[!, color]) <: AbstractVector
                 colorvals = unique(Iterators.flatten(df[!, color]))
                 @warn "it is not known whether per-element color works when not using colorbar"
@@ -198,10 +207,10 @@ function makeplots(
     sp = Subplots(
         rows=isnothing(rows) ? 1 : length(unique(df[!, rows])), 
         cols=isnothing(cols) ? 1 : length(unique(df[!, cols])),
-        shared_xaxes="all", shared_yaxes="all",
+        shared_xaxes=shared_xaxes, shared_yaxes=shared_yaxes,
         start_cell = "top-left",
-        horizontal_spacing=0.04,
-        vertical_spacing=0.05;
+        horizontal_spacing=subplotgaps.horizontal_spacing,
+        vertical_spacing=subplotgaps.vertical_spacing;
         spkwargs...
     )
     
@@ -209,15 +218,16 @@ function makeplots(
     layout_kwargs = Dict()
     layout_kwargs[:font]=attr(
         family="Computer Modern",
-        size=16,
+        size=fontsize,
     )
-    layout_kwargs[:editable] = true
+    # layout_kwargs[:editable] = true
     layout_kwargs[:paper_bgcolor] = colorant"white"
     layout_kwargs[:plot_bgcolor] = colorant"white"
-    layout_kwargs[:yaxis] = attr(showline=true, linewidth=1, linecolor="black", mirror=true, gridcolor="#eeeeee", griddash="dot", zeroline=false)
-    layout_kwargs[:xaxis] = attr(showline=true, linewidth=1, linecolor="black", mirror=true, gridcolor="#eeeeee", griddash="dot", zeroline=false)
+    layout_kwargs[:yaxis] = attr(automargin=true, showline=true, linewidth=1, linecolor="black", mirror=true, gridcolor="#eeeeee", griddash="dot", zeroline=false)
+    layout_kwargs[:xaxis] = attr(automargin=true, showline=true, linewidth=1, linecolor="black", mirror=true, gridcolor="#eeeeee", griddash="dot", zeroline=false)
     # layout_kwargs[:coloraxis] = attr(autocolorscale=true, colorbar=attr(outlinecolor=colorant"black", outlinewidth=1, xref="container", yref="container"))
     layout_kwargs[:coloraxis] = colorbar_args
+    # layout_kwargs.coloraxis.colorbar.labelalias= attr(; layout_kwargs.coloraxis.colorbar.labelalias...)
     if colorbar 
         layout_kwargs[:legend] = attr(
             orientation="h", 
@@ -234,6 +244,8 @@ function makeplots(
     if !isnothing(supertitle) 
         layout_kwargs[:title_text] = supertitle 
     end
+    # layout_kwargs[:xaxis_automargin]=true
+    # layout_kwargs[:yaxis_automargin]=true
     if !isnothing(xaxis_home_range) layout_kwargs[:xaxis_range] = [xaxis_home_range.min, xaxis_home_range.max] end
     if !isnothing(yaxis_home_range) layout_kwargs[:yaxis_range] = [yaxis_home_range.min, yaxis_home_range.max] end
 
@@ -249,7 +261,7 @@ function makeplots(
         active=1,
         currentvalue_prefix=slider_current_value_prefix,
         # pad_t=40,
-        pad = attr(b=0, l=0, r=0, t=60),
+        pad = attr(b=30, l=0, r=0, t=120),
     )]
     layout_kwargs[:margin] = attr(
         b=200,
@@ -277,7 +289,24 @@ function makeplots(
         ).fields,
         displayModeBar=true,
         # queuelength=5,
+        # editable=true
     ))
+    update_annotations!(fig, font_size=fontsize)
+    for i in fig.plot.layout.annotations
+        if i.text == x_title
+            println("here1, $(i.x)")
+            i.y += offsets.xtitle
+        elseif i.text == y_title
+            println("here2, $(i.y)")
+            i.x += offsets.ytitle
+        elseif rows ∈ names(df) && i.text ∈ row_title_func.(unique(df[!, rows]))
+            println("here3, $(i.x)")
+            i.x += offsets.rowtitle
+        elseif cols ∈ names(df) && i.text ∈ col_title_func.(unique(df[!, cols]))
+            println("here4, $(i.y)")
+            i.y += offsets.coltitle
+        end
+    end
     legend_seen_already = []
     layoutkeys = keys(fig.plot.layout)
     layoutkeys = collect(layoutkeys)[(x->(occursin("axis", string(x)))).(layoutkeys)]
@@ -312,6 +341,9 @@ function makeplots(
 
         scatargs = Dict()
         scatargs[:marker] = attr()
+        if marker_line_width isa Real
+            scatargs[:marker].line_width=marker_line_width
+        end
         if (x isa Vector) 
             scatargs[:x] = x
         elseif (x isa NamedTuple) 
@@ -345,15 +377,28 @@ function makeplots(
         if trace_names ∈ names(df) scatargs[:name] = trace[trace_names] end
         if color ∈ names(df)       
             scatargs[:marker].color = to_color.(trace[color])
-            # scatargs[:marker].line = attr(color=trace[color])
+            scatargs[:marker].line = attr(color=to_color.(trace[color]))
+            # scatargs[:marker].line_color = to_color.(trace[color])
+            # if marker_line_width isa Real
+            #     scatargs[:marker].line.width = marker_line_width
+            # end
             if colorbar
                 # scatargs[:showlegend]=false
+                if occursin("lines", scattermode)
+                    # scatargs[:line_color]=trace[color]
+                    scatargs[:line_coloraxis]="coloraxis"
+                    scatargs[:line] = attr(
+                        color=to_color(first(trace[color]))
+                    )
+                end
                 if trace[color] isa Real && occursin("markers", scattermode)
                     scatargs[:marker].color = [trace[color] for _ in 1:length(if :x in keys(scatargs) scatargs[:x] else scatargs[:y] end)]
                 end
-                scatargs[:marker].coloraxis = "coloraxis"
+                if map_to_colorbar && !occursin("lines", scattermode)
+                    scatargs[:marker].coloraxis = "coloraxis"
+                    scatargs[:marker].showscale = true
+                end
                 # scatargs[:marker].line.coloraxis = "coloraxis"
-                scatargs[:marker].showscale = true
             else
                 scatargs[:legendrank]=color_sort_func(trace[color])
             end
@@ -385,6 +430,9 @@ function makeplots(
         )
     end
     if slider ∉ names(df)
+        if colorbar && occursin("lines", scattermode)
+            PlotlyJS.add_trace!(fig, scatterfunc(x=[0,0,0], y=[0,0,0], visible="legendonly", mode="markers", marker=attr(coloraxis="coloraxis", showscale=true)))
+        end
         return fig
     end
     # for data in sliderdata
@@ -404,7 +452,10 @@ function makeplots(
         if col_updates_on_slider(legendgroup) args["legendgrouptitle_text"] = getcol(legendgroup); println("reached legendgroup") end
         if col_updates_on_slider(markershape) args["marker.symbol"] = to_marker.(getcol(markershape)); println("reached markershape") end
         if col_updates_on_slider(trace_names) args["name"] = getcol(trace_names); println("reached trace_names") end
-        if col_updates_on_slider(color)       args["marker.color"] = getcol(color); println("reached color") end
+        if col_updates_on_slider(color)       args["marker.color"] = getcol(color); println("reached color")
+                                              args["line.color"] = getcol(color);
+                                            #   args["marker.line.color"] = getcol(color);
+        end
         if col_updates_on_slider(opacity)     args["opacity"] = getcol(opacity); println("reached opacity") end
         if col_updates_on_slider(markersize)  args["marker.size"] = getcol(markersize); println("reached markersize") end
         if col_updates_on_slider(hovertext)   args["hovertext"] = getcol(hovertext); println("reached hovertext") end
@@ -412,6 +463,9 @@ function makeplots(
         if col_updates_on_slider(scattermode) args["mode"] = getcol(scattermode); println("reached scattermode") end
         if col_updates_on_slider(scattertext) args["text"] = getcol(scattertext); println("reached scattertext") end
         # args["marker.line.color"] = getcol(color)
+    end
+    if colorbar && occursin("lines", scattermode)
+        PlotlyJS.add_trace!(fig, scatterfunc(x=[0,0,0], y=[0,0,0], visible="legendonly", mode="markers", marker=attr(coloraxis="coloraxis", showscale=true)))
     end
     return fig
 end
@@ -565,6 +619,7 @@ function makeplots_old(
             tickvals=collect(-1.0:0.2:1.0),
             xref="container",
             yref="container",
+            thickness=40
         ),
         colorscale=[[-1.0, RGB(colorant"red")], [1.0, RGB(colorant"blue")]],
 
@@ -768,7 +823,7 @@ function savehtmlplot(plot, filename::String=nothing)
     end
     # save to file
     open(filename, "w") do io
-        PlotlyBase.to_html(io, plot)
+        PlotlyBase.to_html(io, plot, full_html=true)
     end
 end
 
