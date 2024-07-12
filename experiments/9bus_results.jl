@@ -21,10 +21,9 @@ include("plotting.jl")
 
 getvec(x::LoadParams) = round.([x.z_percent, x.i_percent, x.p_percent, x.e_percent], digits=3)
 
-df = load_serde_data("data/forplot_fine").df
-# df = @subset df begin
-#     @byrow getvec(:"ZIPE Load Params")[1] != 1.0
-# end;
+df = load_serde_data("/data/reiddye/loads/forplot_fine_twocase").df
+# if neccessary, filter injector setup to only get the ones you want
+
 df[!, "ZIPE Load Params"] = getvec.(df[!, "ZIPE Load Params"]);
 df[!, "markershape"] = map(x-> if x[1] ≈ 1.0 L"Constant Impedance" elseif x[3] > 0 L"\Large{\eta_P > 0}" elseif x[4] > 0 L"\Large{\eta_E > 0}" else "E=P=0" end, df[!, "ZIPE Load Params"]);
 df[!, "legendgroup"] = map(x-> if x[1] ≈ 1.0 L"{}{}{}" elseif x[3] > 0 L"{}" elseif x[4] > 0 L"{}{}" else L"{{}}" end, df[!, "ZIPE Load Params"]);
@@ -46,11 +45,11 @@ df[!, "participation_factors"] = map(sm->get(pfactors(sm), "generator-3-1 ir_cnv
 df[!, "participation_factors"] = map(x->x isa Missing ? "" : "\nPF: ".*string.(round.((collect(x)), sigdigits=5)), df.participation_factors);
 df[!, "hovertext_eig"] = [i.*j for (i, j) in zip(df[!, "hovertext"], df[!, "participation_factors"])];
 df[!, "reverse_colorbar"] = -df[!, "colorbar"];
-df = sort(df, ["Power Setpoint", "colorbar", "Line Model", "hovertext", "e_percent", "power_percent"]);
+df = sort(df, ["Power Setpoint", "colorbar", "Line Model", "hovertext", "e_percent", "power_percent", "Injector Setup"]);
 p = makeplots(
     df;
     rows="Line Model",
-    # cols="Injector Setup",
+    cols="Injector Setup",
     color="reverse_colorbar",
     legendgroup="transient_legendgroup_hack",
     legendgroup_title_func=x->nothing,
@@ -117,7 +116,7 @@ savehtmlplot(p, "transient_niceified_fine_bus3")
 p = makeplots(
     df;
     rows="Line Model",
-    # cols="Injector Setup",
+    cols="Injector Setup",
     color="reverse_colorbar",
     legendgroup="hovertext",
     # markershape="markershape",
@@ -398,3 +397,27 @@ p = makeplots(
     image_export_size=(height=800, width=1600),
 )
 savehtmlplot(p, "transient1")
+
+
+df2 = @subset df begin
+    :reverse_colorbar .> -1.1
+end
+p = PlotlyJS.plot(PlotlyJS.scatter(;
+    x=df2[!, "reverse_colorbar"], 
+    y=df2[!, "dt"]/1e9, 
+    marker=attr(color=map(x->((x=="SM, SM, SM") ? hex(colorant"red") : hex(colorant"blue")), df2[!, "Injector Setup"])),
+    mode="markers",
+),
+Layout(title=attr(text="red=SM/SM/SM, blue=SM/GFM/GFL"), xaxis=attr(title=L"\eta_E-\eta_P"), yaxis=attr(title="Simulation Runtime (s)")))
+
+df2[!, L"\eta_E-\eta_P"] = df2[!, "reverse_colorbar"]
+df2[!, "Runtime (s)"] = df2[!, "dt"]/1e9
+p = PlotlyJS.plot(df2; 
+    x=Symbol(L"\eta_E-\eta_P"),
+    y=Symbol("Runtime (s)"),
+    color=Symbol("Injector Setup"),
+    symbol=Symbol("Line Model"),
+    mode="markers"
+)
+
+savehtmlplot(p, "runtime")

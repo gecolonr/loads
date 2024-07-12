@@ -234,6 +234,7 @@ end
 # enable or add more cases here if you want. The second line is the case from the paper.
 gss = GridSearchSys(s, [#sm_inj() gfl_inj() gfm_inj(); 
                         sm_inj() gfm_inj() gfl_inj(); 
+                        sm_inj() sm_inj() sm_inj();
                         # gfm_inj() gfl_inj() sm_inj();
                         # gfm_inj() gfm_inj() sm_inj();
                         # gfm_inj() sm_inj() sm_inj();
@@ -257,4 +258,4 @@ add_result!(gss, "time", get_time)
 # add_result!(gss, ["Load Voltage at $busname" for busname in get_name.(get_bus.(get_components(StandardLoad, gss.base)))], get_zipe_load_voltages)
 
 
-execute_sims!(gss, BranchTrip(0.5, ACBranch, line_params.alg_line_name), tspan=(0.48, 1.0), dtmax=0.05, run_transient=true, log_path="/data/reiddye/loads/forplot_fine")
+execute_sims!(gss, BranchTrip(0.5, ACBranch, line_params.alg_line_name), tspan=(0.48, 1.0), dtmax=0.05, run_transient=true, log_path="/data/reiddye/loads/forplot_fine_twocase")

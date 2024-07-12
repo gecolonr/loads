@@ -159,7 +159,7 @@ function add_result!(gss::GridSearchSys, title::AbstractString, getter::Function
     push!(gss.results_header, title)
     push!(gss.results_getters, getter)
     if !isempty(gss.df)
-        gss.df[!, title] .= map(x->getter(gss, x...), eachrow(select(gss.df, "sim", "sm", "error")))
+        gss.df[!, title] .= map(x->getter(gss, x...), eachrow(select(gss.df, "sim", "sm", "error", "dt")))
     end
 end
 
@@ -176,7 +176,7 @@ function add_result!(gss::GridSearchSys, titles::Vector{T}, getter::Function) wh
     push!(gss.results_header, titles...)
     push!(gss.results_getters, getter)
     if !isempty(gss.df)
-        data = map(x->getter(gss, x...), eachrow(select(gss.df, "sim", "sm", "error")))
+        data = map(x->getter(gss, x...), eachrow(select(gss.df, "sim", "sm", "error", "dt")))
         # println(data)
         for (idx, title) in enumerate(titles)
             gss.df[!, title] .= map(x->x[idx], data)
@@ -235,6 +235,7 @@ function GridSearchSys(sys::System, injectors::Union{AbstractArray{DynamicInject
     add_result!(gss, "error", get_error)
     add_result!(gss, "sim", get_sim)
     add_result!(gss, "sm", get_sm)
+    add_result!(gss, "dt", get_dt)
     return gss
 end
 
@@ -388,7 +389,7 @@ function execute_sims!(
     function inner(config::Vector{Any}, sys::System)
         (sim, sm, dt, error) = runSim(sys, change, ResidualModel, tspan, IDA(; ida_opts...), dtmax, run_transient)
         i = Threads.atomic_add!(counter, 1) + 1
-        results = vcat(config, reduce(vcat, (getter(gss, sim, sm, error) for getter in gss.results_getters)))
+        results = vcat(config, reduce(vcat, (getter(gss, sim, sm, error, dt) for getter in gss.results_getters)))
         println("finished solve $i/$total in $(round(Int(dt)/1e9, digits=2))s ($(round(100.0*i/total))%) (runtime: $(round(time()-start))s)")
         return results
     end
@@ -552,9 +553,18 @@ end
 """
 [This is a results getter function]
 
+gets the time taken to run this simulation.
+"""
+function get_dt(_gss::GridSearchSys, _sim::Union{Simulation, Missing}, _sm::Union{PSID.SmallSignalOutput, Missing}, _error::Union{String, Missing}, dt::Real)
+    return dt
+end
+
+"""
+[This is a results getter function]
+
 gets system eigenvalues from small signal analysis.
 """
-function get_eigenvalues(_gss::GridSearchSys, _sim::Union{Simulation, Missing}, sm::Union{PSID.SmallSignalOutput, Missing}, _error::Union{String, Missing})
+function get_eigenvalues(_gss::GridSearchSys, _sim::Union{Simulation, Missing}, sm::Union{PSID.SmallSignalOutput, Missing}, _error::Union{String, Missing}, dt::Real)
     return sm isa Missing ? missing : [sm.eigenvalues]
 end
 
@@ -564,7 +574,7 @@ end
 
 gets system eigenvectors from small signal analysis.
 """
-function get_eigenvectors(_gss::GridSearchSys, _sim::Union{Simulation, Missing}, sm::Union{PSID.SmallSignalOutput, Missing}, _error::Union{String, Missing})
+function get_eigenvectors(_gss::GridSearchSys, _sim::Union{Simulation, Missing}, sm::Union{PSID.SmallSignalOutput, Missing}, _error::Union{String, Missing}, dt::Real)
     return sm isa Missing ? missing : [sm.eigenvectors]
 end
 
@@ -573,7 +583,7 @@ end
 
 gets the small signal analysis object `sm`
 """
-function get_sm(_gss::GridSearchSys, _sim::Union{Simulation, Missing}, sm::Union{PSID.SmallSignalOutput, Missing}, _error::Union{String, Missing})
+function get_sm(_gss::GridSearchSys, _sim::Union{Simulation, Missing}, sm::Union{PSID.SmallSignalOutput, Missing}, _error::Union{String, Missing}, dt::Real)
     return sm
 end
 
@@ -584,7 +594,7 @@ end
 
 gets voltage time series at every bus in the system.
 """
-function get_bus_voltages(gss::GridSearchSys, sim::Union{Simulation, Missing}, _sm::Union{PSID.SmallSignalOutput, Missing}, _error::Union{String, Missing})
+function get_bus_voltages(gss::GridSearchSys, sim::Union{Simulation, Missing}, _sm::Union{PSID.SmallSignalOutput, Missing}, _error::Union{String, Missing}, dt::Real)
     if sim isa Missing
         return Array{Missing}(missing, length(get_components(Bus, gss.base)))
     else
@@ -599,7 +609,7 @@ end
 
 Returns a vector with an entry for each `Generator` in the base system. Each entry is a time series of the current magnitude.
 """
-function get_injector_currents(gss::GridSearchSys, sim::Union{Simulation, Missing}, _sm::Union{PSID.SmallSignalOutput, Missing}, _error::Union{String, Missing})
+function get_injector_currents(gss::GridSearchSys, sim::Union{Simulation, Missing}, _sm::Union{PSID.SmallSignalOutput, Missing}, _error::Union{String, Missing}, dt::Real)
     gens = get_components(Generator, gss.base)
     if sim isa Missing
         return Array{Missing}(missing, length(gens))
@@ -619,7 +629,7 @@ end
 
 Returns a vector with an entry for each `Generator` in the base system. If there is an inverter there, the entry is a time series of the current magnitude. Otherwise, it's `missing`.
 """
-function get_inverter_currents(gss::GridSearchSys, sim::Union{Simulation, Missing}, _sm::Union{PSID.SmallSignalOutput, Missing}, _error::Union{String, Missing})
+function get_inverter_currents(gss::GridSearchSys, sim::Union{Simulation, Missing}, _sm::Union{PSID.SmallSignalOutput, Missing}, _error::Union{String, Missing}, dt::Real)
     gens = get_components(Generator, gss.base)
     if sim isa Missing
         return Array{Missing}(missing, length(gens))
@@ -639,7 +649,7 @@ end
 
 gets speed (in rad/s) of all generators in the system.
 """
-function get_generator_speeds(gss::GridSearchSys, sim::Union{Simulation, Missing}, _sm::Union{PSID.SmallSignalOutput, Missing}, _error::Union{String, Missing})
+function get_generator_speeds(gss::GridSearchSys, sim::Union{Simulation, Missing}, _sm::Union{PSID.SmallSignalOutput, Missing}, _error::Union{String, Missing}, dt::Real)
     throw("unimplemented: not tested yet")
     if sim isa Missing
         return Array{Missing}(missing, length(get_components(Generator, gss.base)))
@@ -658,7 +668,7 @@ end
 
 Gets the voltage magnitude time series at all ZIPE loads. 
 """
-function get_zipe_load_voltages(gss::GridSearchSys, sim::Union{Simulation, Missing}, _sm::Union{PSID.SmallSignalOutput, Missing}, _error::Union{String, Missing})
+function get_zipe_load_voltages(gss::GridSearchSys, sim::Union{Simulation, Missing}, _sm::Union{PSID.SmallSignalOutput, Missing}, _error::Union{String, Missing}, dt::Real)
     if (sim isa Missing) || (sim.results isa Nothing)
         return Array{Missing}(missing, length(get_components(StandardLoad, gss.base)))
     end
@@ -671,7 +681,7 @@ end
 
 Gets the timestamps for transient results. 
 """
-function get_time(gss::GridSearchSys, sim::Union{Simulation, Missing}, _sm::Union{PSID.SmallSignalOutput, Missing}, _error::Union{String, Missing})
+function get_time(gss::GridSearchSys, sim::Union{Simulation, Missing}, _sm::Union{PSID.SmallSignalOutput, Missing}, _error::Union{String, Missing}, dt::Real)
     if sim isa Missing
         return [missing]
     end
@@ -684,7 +694,7 @@ end
 
 Gets the currrent magnitude time series at each ZIPE load.
 """
-function get_zipe_load_current_magnitudes(gss::GridSearchSys, sim::Union{Simulation, Missing}, _sm::Union{PSID.SmallSignalOutput, Missing}, _error::Union{String, Missing})
+function get_zipe_load_current_magnitudes(gss::GridSearchSys, sim::Union{Simulation, Missing}, _sm::Union{PSID.SmallSignalOutput, Missing}, _error::Union{String, Missing}, dt::Real)
     throw("unimplemented: not tested yet.")
     if (sim isa Missing) || (sim.results isa Nothing)
         return Array{Missing}(missing, length(get_components(StandardLoad, gss.base)))
@@ -698,7 +708,7 @@ end
 
 gets the value `sim.status` from the Simulation object (or missing).
 """
-function get_sim_status(_gss::GridSearchSys, sim::Union{Simulation, Missing}, _sm::Union{PSID.SmallSignalOutput, Missing}, _error::Union{String, Missing})
+function get_sim_status(_gss::GridSearchSys, sim::Union{Simulation, Missing}, _sm::Union{PSID.SmallSignalOutput, Missing}, _error::Union{String, Missing}, dt::Real)
     return (sim isa Missing) ? missing : sim.status
 end
 
@@ -707,7 +717,7 @@ end
 
 gets the string representation of the error raised during simulation (or missing)
 """
-function get_error(_gss::GridSearchSys, _sim::Union{Simulation, Missing}, _sm::Union{PSID.SmallSignalOutput, Missing}, error::Union{String, Missing})
+function get_error(_gss::GridSearchSys, _sim::Union{Simulation, Missing}, _sm::Union{PSID.SmallSignalOutput, Missing}, error::Union{String, Missing}, dt::Real)
     return error
 end
 
@@ -716,7 +726,7 @@ end
 
 gets the whole Simulation object.
 """
-function get_sim(_gss::GridSearchSys, sim::Union{Simulation, Missing}, _sm::Union{PSID.SmallSignalOutput, Missing}, _error::Union{String, Missing})
+function get_sim(_gss::GridSearchSys, sim::Union{Simulation, Missing}, _sm::Union{PSID.SmallSignalOutput, Missing}, _error::Union{String, Missing}, dt::Real)
     return sim
 end
 
