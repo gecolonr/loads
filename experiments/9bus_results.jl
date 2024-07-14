@@ -17,12 +17,11 @@ using Colors
 include("sysbuilder.jl")
 include("plotting.jl")
 
-
+just_like_paper=false
 
 getvec(x::LoadParams) = round.([x.z_percent, x.i_percent, x.p_percent, x.e_percent], digits=3)
 
-df = load_serde_data("/data/reiddye/loads/forplot_fine_twocase").df
-# if neccessary, filter injector setup to only get the ones you want
+df = load_serde_data("data/forplot_fine_twocase").df
 
 df[!, "ZIPE Load Params"] = getvec.(df[!, "ZIPE Load Params"]);
 df[!, "markershape"] = map(x-> if x[1] ≈ 1.0 L"Constant Impedance" elseif x[3] > 0 L"\Large{\eta_P > 0}" elseif x[4] > 0 L"\Large{\eta_E > 0}" else "E=P=0" end, df[!, "ZIPE Load Params"]);
@@ -46,10 +45,17 @@ df[!, "participation_factors"] = map(x->x isa Missing ? "" : "\nPF: ".*string.(r
 df[!, "hovertext_eig"] = [i.*j for (i, j) in zip(df[!, "hovertext"], df[!, "participation_factors"])];
 df[!, "reverse_colorbar"] = -df[!, "colorbar"];
 df = sort(df, ["Power Setpoint", "colorbar", "Line Model", "hovertext", "e_percent", "power_percent", "Injector Setup"]);
+
+if just_like_paper
+    df = @subset df begin
+        :"Injector Setup" .== "SM, GFM, GFL"
+    end
+end
+
 p = makeplots(
     df;
     rows="Line Model",
-    cols="Injector Setup",
+    cols= just_like_paper ? nothing : "Injector Setup",
     color="reverse_colorbar",
     legendgroup="transient_legendgroup_hack",
     legendgroup_title_func=x->nothing,
@@ -102,7 +108,7 @@ p = makeplots(
             xref="paper",
             yref="paper",
             x=1.02,
-            thickness=45
+            thickness=40
             # xpad=20,
             
         ),
@@ -111,12 +117,12 @@ p = makeplots(
     )),
     fontsize=24,
 )
-savehtmlplot(p, "transient_niceified_fine_bus3")
+savehtmlplot(p, "transient1")
 
 p = makeplots(
     df;
     rows="Line Model",
-    cols="Injector Setup",
+    cols= just_like_paper ? nothing : "Injector Setup",
     color="reverse_colorbar",
     legendgroup="hovertext",
     # markershape="markershape",
@@ -174,7 +180,7 @@ p = makeplots(
             xref="paper",
             yref="paper",
             x=1.02,
-            width=45,
+            thickness=40,
             # xpad=20,
             
         ),
@@ -182,7 +188,7 @@ p = makeplots(
         colorscale=vcat([[[(idx-1)/12, color], [idx/12, color]] for (idx, color) in enumerate(vcat(RGB(0, 1, 0), RGB.(range(colorant"red", colorant"blue", length=11))))]...),
     )),
 )
-savehtmlplot(p, "eigplot_niceified_fine")
+savehtmlplot(p, "eigenvalues1")
 
 
 # p = makeplots(
@@ -254,7 +260,7 @@ p = makeplots(
         (:"Power Setpoint".≈0.2) .|| (:"Power Setpoint".≈0.5) .|| (:"Power Setpoint".≈0.8)
         :"Line Model" .== "dynpi"
     end;
-    # rows="Line Model",
+    rows= just_like_paper ? nothing : "Injector Setup",
     cols="Power Setpoint",
     color="reverse_colorbar",
     legendgroup="hovertext",
@@ -313,7 +319,7 @@ p = makeplots(
             xref="paper",
             yref="paper",
             x=1.02,
-            width=45,
+            thickness=40,
             # xpad=20,
             
         ),
@@ -322,14 +328,14 @@ p = makeplots(
     )),
     image_export_size=(height=800, width=1600),
 )
-savehtmlplot(p, "eigplot1")
+savehtmlplot(p, "eigenvalues2")
 
 p = makeplots(
     @subset df begin
         (:"Power Setpoint".≈0.2) .|| (:"Power Setpoint".≈0.5) .|| (:"Power Setpoint".≈0.8)
         :"Line Model" .== "dynpi"
     end;
-    # rows="Line Model"
+    rows= just_like_paper ? nothing : "Injector Setup",
     cols="Power Setpoint",
     # cols="Injector Setup",
     color="reverse_colorbar",
@@ -387,7 +393,7 @@ p = makeplots(
             xref="paper",
             yref="paper",
             x=1.02,
-            width=45,
+            thickness=40,
             # xpad=20,
             
         ),
@@ -396,28 +402,24 @@ p = makeplots(
     )),
     image_export_size=(height=800, width=1600),
 )
-savehtmlplot(p, "transient1")
+savehtmlplot(p, "transient2")
 
 
-df2 = @subset df begin
-    :reverse_colorbar .> -1.1
-end
-p = PlotlyJS.plot(PlotlyJS.scatter(;
-    x=df2[!, "reverse_colorbar"], 
-    y=df2[!, "dt"]/1e9, 
-    marker=attr(color=map(x->((x=="SM, SM, SM") ? hex(colorant"red") : hex(colorant"blue")), df2[!, "Injector Setup"])),
-    mode="markers",
-),
-Layout(title=attr(text="red=SM/SM/SM, blue=SM/GFM/GFL"), xaxis=attr(title=L"\eta_E-\eta_P"), yaxis=attr(title="Simulation Runtime (s)")))
 
-df2[!, L"\eta_E-\eta_P"] = df2[!, "reverse_colorbar"]
-df2[!, "Runtime (s)"] = df2[!, "dt"]/1e9
-p = PlotlyJS.plot(df2; 
-    x=Symbol(L"\eta_E-\eta_P"),
+
+### Experimental plot about runtime
+df[!, L"\eta_E-\eta_P"] = df[!, "reverse_colorbar"]
+df[!, "Runtime (s)"] = df[!, "dt"]/1e9
+df[!, "Output Density"] = length.(df[!, "time"])./(maximum.(df[!, "time"]) .- minimum.(df[!, "time"]))
+df[!, "ZIPE Load Params"] = string.(df[!, "ZIPE Load Params"])
+# df = sort(df, "reverse_colorbar")
+p = PlotlyJS.plot(df; 
+    x=Symbol("ZIPE Load Params"),
     y=Symbol("Runtime (s)"),
     color=Symbol("Injector Setup"),
     symbol=Symbol("Line Model"),
     mode="markers"
 )
 
-savehtmlplot(p, "runtime")
+# don't save for now, not a polished plot
+# savehtmlplot(p, "runtime")
