@@ -1,1 +1,1 @@
-function set_power_setpt! end; function create_statpi_system end; function create_dynpi_system end; function get_sm end; function small_signal_tripped end; function get_time end; function get_zipe_load_voltages end; 
+function get_error end; function get_sim end; function get_sm end; function get_dt end; function set_power_setpt! end; function scale_line_impedance! end; function create_statpi_system end; function create_dynpi_system end; function get_zipe_load_voltages end; 
