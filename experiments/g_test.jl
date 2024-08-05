@@ -139,39 +139,45 @@ end
 
 # Defining a function to change generation portfolio, maybe this needs to be done in two
 function change_gen_portfolio!(sys::System, gen_scale::Real)
+    p_sum = 0
+    q_sum = 0
+    gen_num = 0
     for gen in get_components(Generator, sys)
-        p_sum = 0
-        q_sum = 0
-        if gen.bus.bustype == ACBusTypes.PV
-            p_sum += get_active_power(gen)
-            q_sum += get_reactive_power(gen)
-        end
+        p_sum += get_active_power(gen)
+        q_sum += get_reactive_power(gen)
+        gen_num += 1
     end
     for gen in get_components(Generator, sys)
-        if (gen.dynamic_injector = DynamicGenerator)
-            set_active_power!(gen, gen_scale*p_sum)
-            set_reactive_power!(gen, gen_scale*q_sum)
+        # if (typeof(gen.dynamic_injector) == DynamicGenerator{})
+        if (gen.bus. number == 1)  
+            set_active_power!(gen, gen_scale/gen_num*p_sum)
+            set_reactive_power!(gen, gen_scale/gen_num*q_sum)
         end
     end
     return sys
 end
 
 function change_inv_portfolio!(sys::System, gfm_scale::Real)
-    for inv in get_components(Generator, sys)
-        p_inv = 0
-        q_inv = 0
-        if (inv.dynamic_injector = DynamicInverter)
-            p_inv += get_active_power(inv)
-            q_inv += get_reactive_power(inv)
+    p_inv = 0
+    q_inv = 0
+    for gen in get_components(Generator, sys)
+        # if (typeof(gen.dynamic_injector) == DynamicInverter{})
+        if (gen.bus.number == 2 || gen.bus.number == 3)
+            p_inv += get_active_power(gen)
+            q_inv += get_reactive_power(gen)
         end
     end
     for gen in get_components(Generator, sys)
-        if (gen.dynamic_injector = DynamicInverter.outer_control = GFM_outer_control)
+        # if (typeof(gen.dynamic_inverter.inner_control) == VoltageModeControl)
+        if (gen.bus.number == 2)    
             set_active_power!(gen, gfm_scale*p_inv)
             set_reactive_power!(gen, gfm_scale*q_inv)      
-        else (gen.dynamic_injector = DynamicInverter.outer_control = GFL_outer_control)
+        # elseif (typeof(gen.dynamic_inverter.inner_control) == CurrentModeControl)
+        elseif (gen.bus. number == 3)
             set_active_power!(gen, (1 - gfm_scale)*p_inv)
             set_reactive_power!(gen, (1 - gfm_scale)*q_inv)
+        else
+            continue
         end
     end
     return sys
@@ -191,12 +197,12 @@ gss = GridSearchSys(s, [sm_inj() gfl_inj() gfm_inj();],
 set_chunksize!(gss, 200)
 
 power_stpt_range = collect(1.0:0.1:1.0)
-scale_line_range = collect(1.0:0.1:1.0)
-gen_portfolio_range = collect(1.0:0.1:1.0)
-gfm_portfolio_range = collect(1.0:0.1:1.0)
+scale_impedance_range = collect(1.0:0.1:1.0)
+gen_portfolio_range = collect(0.1:0.1:0.3)
+gfm_portfolio_range = collect(0.2:0.1:0.6)
 
 add_generic_sweep!(gss, "Power Setpoint", set_power_setpt!, power_stpt_range)
-add_generic_sweep!(gss, "Line impedance increase", scale_line_impedance!, scale_line_range)
+add_generic_sweep!(gss, "Line impedance increase", scale_line_impedance!, scale_impedance_range)
 add_generic_sweep!(gss, "SM percent", change_gen_portfolio!, gen_portfolio_range)
 add_generic_sweep!(gss, "GFM percent", change_inv_portfolio!, gen_portfolio_range)
 add_lines_sweep!(gss, [line_params], line_adders)
@@ -205,6 +211,6 @@ add_lines_sweep!(gss, [line_params], line_adders)
 # add_result!(gss, "final_sm", small_signal_tripped)
 
 # add_result!(gss, "time", get_time)
-add_result!(gss, ["Load Voltage at $busname" for busname in get_name.(get_bus.(get_components(StandardLoad, gss.base)))], get_zipe_load_voltages)
-
+# add_result!(gss, ["Load Voltage at $busname" for busname in get_name.(get_bus.(get_components(StandardLoad, gss.base)))], get_zipe_load_voltages)
+add_result!(gss, "Eigs", get_eigenvalues)
 execute_sims!(gss, BranchTrip(0.5, ACBranch, line_params.alg_line_name), tspan=(0.48, 5.5), dtmax=0.05, run_transient=true, log_path="data/gab_tests")
