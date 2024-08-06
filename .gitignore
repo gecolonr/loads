@@ -8,3 +8,4 @@ saved_objects.zip
 *.pkl
 Manifestbackup.toml
 Projectbackup.toml
+build/
