@@ -59,7 +59,6 @@ capacitance_csv = "data/cable_data/dommel_data_C.csv"
 M = 3
 z_km, y_km, z_km_ω, Z_c = get_line_parameters_from_data(impedance_csv, capacitance_csv, M)
 
-
 line_length_dict = Dict(
     "Bus 5-Bus 4-i_1" => 90,
     "Bus 7-Bus 8-i_1" => 80,
@@ -85,6 +84,7 @@ line_params = LineModelParams(
 function no_change(sys::System, params::LineModelParams)
     return sys
 end
+
 function create_simple_dynpi(sys::System, params::LineModelParams)
     for ll in get_components(Line, sys)
         if (ll.name != "Bus 5-Bus 4-i_1")
@@ -137,29 +137,80 @@ function scale_line_impedance!(sys::System, scale::Real)
     return sys
 end
 
-
-function small_signal_tripped(gss::GridSearchSys, sim::Union{Simulation, Missing}, sm::Union{PSID.SmallSignalOutput, Missing}, error::Union{String, Missing})
-    if isnothing(sim) return missing end
-    sys = deepcopy(sim.sys)
-    remove_component!(Line, sys, sim.perturbations[1].branch_name)
-    newsim = Simulation(ResidualModel, sys, mktempdir(), (0.0, 1.0), disable_timer_outputs=true)
-    sm = small_signal_analysis(newsim)
-    return sm
+# Defining a function to change generation portfolio, maybe this needs to be done in two
+function change_gen_portfolio!(sys::System, gen_scale::Real)
+    p_sum = 0
+    q_sum = 0
+    gen_num = 0
+    for gen in get_components(Generator, sys)
+        p_sum += get_active_power(gen)
+        q_sum += get_reactive_power(gen)
+        gen_num += 1
+    end
+    for gen in get_components(Generator, sys)
+        # if (typeof(gen.dynamic_injector) == DynamicGenerator{})
+        if (gen.bus. number == 1)  
+            set_active_power!(gen, gen_scale/gen_num*p_sum)
+            set_reactive_power!(gen, gen_scale/gen_num*q_sum)
+        end
+    end
+    return sys
 end
 
-gss = GridSearchSys(s, [sm_inj() gfl_inj() gfm_inj(); ],
+function change_inv_portfolio!(sys::System, gfm_scale::Real)
+    p_inv = 0
+    q_inv = 0
+    for gen in get_components(Generator, sys)
+        # if (typeof(gen.dynamic_injector) == DynamicInverter{})
+        if (gen.bus.number == 2 || gen.bus.number == 3)
+            p_inv += get_active_power(gen)
+            q_inv += get_reactive_power(gen)
+        end
+    end
+    for gen in get_components(Generator, sys)
+        # if (typeof(gen.dynamic_inverter.inner_control) == VoltageModeControl)
+        if (gen.bus.number == 2)    
+            set_active_power!(gen, gfm_scale*p_inv)
+            set_reactive_power!(gen, gfm_scale*q_inv)      
+        # elseif (typeof(gen.dynamic_inverter.inner_control) == CurrentModeControl)
+        elseif (gen.bus. number == 3)
+            set_active_power!(gen, (1 - gfm_scale)*p_inv)
+            set_reactive_power!(gen, (1 - gfm_scale)*q_inv)
+        else
+            continue
+        end
+    end
+    return sys
+end
+
+# function small_signal_tripped(gss::GridSearchSys, sim::Union{Simulation, Missing}, sm::Union{PSID.SmallSignalOutput, Missing}, error::Union{String, Missing})
+#     if isnothing(sim) return missing end
+#     sys = deepcopy(sim.sys)
+#     remove_component!(Line, sys, sim.perturbations[1].branch_name)
+#     newsim = Simulation(ResidualModel, sys, mktempdir(), (0.0, 1.0), disable_timer_outputs=true)
+#     sm = small_signal_analysis(newsim)
+#     return sm
+# end
+
+gss = GridSearchSys(s, [sm_inj() gfl_inj() gfm_inj();],
                         ["Bus1", "Bus 2", "Bus 3"]) # just make sure the busses are in the right order
 set_chunksize!(gss, 200)
 
-add_generic_sweep!(gss, "Power Setpoint", set_power_setpt!, collect(0.2:0.1:1.4))
-add_generic_sweep!(gss, "Line impedance increase", scale_line_impedance!, collect(1.0:0.1:10.0))
+power_stpt_range = collect(1.0:0.1:1.0)
+scale_impedance_range = collect(1.0:0.1:1.0)
+gen_portfolio_range = collect(0.1:0.1:0.3)
+gfm_portfolio_range = collect(0.2:0.1:0.6)
+
+add_generic_sweep!(gss, "Power Setpoint", set_power_setpt!, power_stpt_range)
+add_generic_sweep!(gss, "Line impedance increase", scale_line_impedance!, scale_impedance_range)
+add_generic_sweep!(gss, "SM percent", change_gen_portfolio!, gen_portfolio_range)
+add_generic_sweep!(gss, "GFM percent", change_inv_portfolio!, gen_portfolio_range)
 add_lines_sweep!(gss, [line_params], line_adders)
-add_zipe_sweep!(gss, missing, (x->LoadParams(x...)).(values(η_combos))) # no standard load adder. already in the system.
-add_result!(gss, "initial_sm", get_sm)
-add_result!(gss, "final_sm", small_signal_tripped)
+# add_zipe_sweep!(gss, missing, (x->LoadParams(x...)).(values(η_combos))) # no standard load adder. already in the system.
+# add_result!(gss, "initial_sm", get_sm)
+# add_result!(gss, "final_sm", small_signal_tripped)
 
-add_result!(gss, "time", get_time)
-add_result!(gss, ["Load Voltage at $busname" for busname in get_name.(get_bus.(get_components(StandardLoad, gss.base)))], get_zipe_load_voltages)
-
-
+# add_result!(gss, "time", get_time)
+# add_result!(gss, ["Load Voltage at $busname" for busname in get_name.(get_bus.(get_components(StandardLoad, gss.base)))], get_zipe_load_voltages)
+add_result!(gss, "Eigs", get_eigenvalues)
 execute_sims!(gss, BranchTrip(0.5, ACBranch, line_params.alg_line_name), tspan=(0.48, 5.5), dtmax=0.05, run_transient=true, log_path="data/gab_tests")
