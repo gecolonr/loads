@@ -21,7 +21,7 @@ just_like_paper=false
 
 getvec(x::LoadParams) = round.([x.z_percent, x.i_percent, x.p_percent, x.e_percent], digits=3)
 
-df = load_serde_data("data/forplot_fine_twocase").df
+df = load_serde_data("data/paper_results").df
 
 df[!, "ZIPE Load Params"] = getvec.(df[!, "ZIPE Load Params"]);
 df[!, "markershape"] = map(x-> if x[1] ≈ 1.0 L"Constant Impedance" elseif x[3] > 0 L"\Large{\eta_P > 0}" elseif x[4] > 0 L"\Large{\eta_E > 0}" else "E=P=0" end, df[!, "ZIPE Load Params"]);
@@ -287,7 +287,7 @@ p = makeplots(
     y_title=L"\Large{\mathrm{Im}(\lambda)}",
     # col_title_func=x->LaTeXString("\$\\Large{\\text{Load Scale: }$(string(x))}\$"),
     col_title_func=x->"Load Scale: "*string(x),
-    row_title_func=x->(x*" lines"),
+    # row_title_func=x->(x*" lines"),
     # col_title_func=x->Lastring(x)
 
     supertitle=L"\Large{\text{System Eigenvalues}}",
@@ -362,7 +362,7 @@ p = makeplots(
     x_title=L"\Large{\mathrm{Time}\:\: [\mathrm{s}]}",
     y_title = L"\Large{||i_\text{filter}||\:\:[\mathrm{p.u.}]\:\:\text{(Bus 3)}}",
     # row_title_func=x->LaTeXString("\$\\Large{\\text{$x lines}}\$"),
-    row_title_func = x->(x*" lines"),
+    # row_title_func = x->(x*" lines"),
     col_title_func=x->"Load Scale: "*string(x),
 
     supertitle=L"\Large{\text{Transient Current at Bus 3}}",

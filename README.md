@@ -10,7 +10,7 @@ Code from *Effects of dynamic power electronic load models for power systems ana
 
 There are two steps: running the simulations and plotting the results.
 
-First, run the simulations. This may take a while or a long while depending on how many cores your computer has. `-t $(nproc)` just ensures that julia uses as many threads as you have cores.
+First, run the simulations. This may take a while or a long while depending on how many cores your computer has - it took about ADD TIME HERE on our 128-core server. `-t $(nproc)` just ensures that julia uses as many threads as you have cores. 
 ```bash
 julia -t $(nproc) experiments/9bus_sims.jl
 ```
